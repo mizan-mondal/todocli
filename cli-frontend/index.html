@@ -3,156 +3,45 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Next-generation CLI Todo Manager with interactive terminal emulator, task board, and Spring Boot backend integration.">
-  <title>todocli &bull; Terminal Task Manager</title>
+  <meta name="description" content="todocli - Minimalist Terminal Task Manager">
+  <title>todocli</title>
   
-  <!-- Modern Monospace & Interface Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="style.css">
 </head>
-<body class="theme-midnight">
-  <div class="ambient-glow glow-1"></div>
-  <div class="ambient-glow glow-2"></div>
-
-  <main class="app-layout" id="main-content">
-    <!-- Header Bar -->
-    <header class="top-nav">
-      <div class="brand">
-        <div class="terminal-icon" aria-hidden="true">&gt;_</div>
-        <div class="brand-text">
-          <h1>todocli</h1>
-          <span class="version-tag">v1.0.0</span>
-        </div>
-      </div>
-      
-      <div class="nav-controls">
-        <div class="server-status" id="server-status" title="Backend connection status">
-          <span class="status-dot"></span>
-          <span class="status-label" id="status-text">Checking server...</span>
-        </div>
-        <div class="user-pill" id="user-badge" title="Active CLI user">
-          <span class="user-icon">@</span>
-          <span id="current-user-name">guest</span>
-        </div>
-      </div>
-    </header>
-
-    <!-- Main Workspace: Terminal + Live Task Deck -->
-    <div class="workspace-grid">
-      <!-- Terminal Window -->
-      <section class="terminal-window" aria-label="Command Line Interface">
-        <div class="terminal-header">
-          <div class="window-buttons" aria-hidden="true">
-            <span class="btn-dot btn-close"></span>
-            <span class="btn-dot btn-minimize"></span>
-            <span class="btn-dot btn-maximize"></span>
-          </div>
-          <div class="terminal-title">
-            <span class="prompt-icon">bash</span> &mdash; <span id="window-user-label">guest@todocli</span>: ~ (pty/1)
-          </div>
-          <div class="window-actions">
-            <button class="action-btn" id="btn-clear-term" title="Clear Terminal (Ctrl+L)">Clear</button>
-            <button class="action-btn" id="btn-toggle-scanlines" title="Toggle Scanline FX">Scanlines</button>
-          </div>
-        </div>
-
-        <div class="terminal-body" id="terminal-body">
-          <div class="terminal-welcome">
-            <pre class="ascii-banner" aria-hidden="true">
+<body>
+  <div class="terminal-screen" id="terminal-screen">
+    <!-- ASCII Letter Logo -->
+    <pre class="ascii-logo" aria-label="todocli logo">
   _            _            _ _ 
  | |_ ___   __| | ___   ___| (_)
  | __/ _ \ / _` |/ _ \ / __| | |
  | || (_) | (_| | (_) | (__| | |
   \__\___/ \__,_|\___/ \___|_|_|
-            </pre>
-            <p class="welcome-text">
-              Welcome to <strong>todocli</strong> &mdash; Terminal Task Manager.<br>
-              Type <span class="cmd-highlight">help</span> to view available commands or click quick actions below.
-            </p>
-            <div class="welcome-divider"></div>
-          </div>
+    </pre>
 
-          <!-- Dynamic Output Log -->
-          <div class="terminal-output" id="terminal-output" role="log" aria-live="polite"></div>
+    <!-- Terminal History / Output Area -->
+    <div class="terminal-history" id="terminal-history" role="log" aria-live="polite"></div>
 
-          <!-- Active Prompt Line -->
-          <div class="prompt-container">
-            <span class="prompt-label" id="prompt-label">
-              <span class="prompt-user">guest</span><span class="prompt-sep">@</span><span class="prompt-host">todocli</span>:<span class="prompt-path">~</span><span class="prompt-char">$</span>
-            </span>
-            <div class="input-wrapper">
-              <input 
-                type="text" 
-                id="cli-input" 
-                class="cli-input" 
-                autocomplete="off" 
-                autocorrect="off" 
-                autocapitalize="off" 
-                spellcheck="false" 
-                placeholder="type command (e.g. 'add Finish project report' or 'help')..." 
-                aria-label="CLI Command Input"
-                autofocus
-              >
-            </div>
-          </div>
-        </div>
-
-        <!-- Quick Command Toolbar -->
-        <footer class="terminal-toolbar">
-          <span class="toolbar-label">Quick Execute:</span>
-          <div class="pill-group">
-            <button type="button" class="quick-chip" data-cmd="help">help</button>
-            <button type="button" class="quick-chip" data-cmd="list">list</button>
-            <button type="button" class="quick-chip" data-cmd="add Buy coffee for the team">add "Buy coffee"</button>
-            <button type="button" class="quick-chip" data-cmd="status">status</button>
-            <button type="button" class="quick-chip" data-cmd="clear">clear</button>
-          </div>
-        </footer>
-      </section>
-
-      <!-- Live Task Dashboard -->
-      <aside class="task-deck" aria-label="Task Overview Dashboard">
-        <div class="deck-header">
-          <div class="deck-title-area">
-            <h2>Active Tasks</h2>
-            <span class="counter-badge" id="task-count-badge">0</span>
-          </div>
-          <div class="deck-filters">
-            <button class="filter-btn active" data-filter="all" id="filter-all">All</button>
-            <button class="filter-btn" data-filter="pending" id="filter-pending">Pending</button>
-            <button class="filter-btn" data-filter="completed" id="filter-completed">Done</button>
-          </div>
-        </div>
-
-        <div class="task-list-wrapper" id="task-list-wrapper">
-          <div class="empty-state" id="empty-state">
-            <div class="empty-icon">&empty;</div>
-            <p>No tasks found.</p>
-            <span>Type <code class="inline-code">add &lt;name&gt;</code> in the terminal to create your first task.</span>
-          </div>
-          <ul class="task-list" id="task-list"></ul>
-        </div>
-
-        <div class="deck-footer">
-          <div class="stat-item">
-            <span class="stat-name">Pending</span>
-            <span class="stat-value" id="stat-pending">0</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-name">Completed</span>
-            <span class="stat-value" id="stat-completed">0</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-name">Total</span>
-            <span class="stat-value" id="stat-total">0</span>
-          </div>
-        </div>
-      </aside>
+    <!-- Active Input Line -->
+    <div class="prompt-line" id="prompt-line">
+      <span class="prompt-text"><span class="prompt-user" id="prompt-user">guest@todocli</span>:<span class="prompt-path">~</span>$</span>
+      <input 
+        type="text" 
+        id="cli-input" 
+        class="cli-input" 
+        autocomplete="off" 
+        autocorrect="off" 
+        autocapitalize="off" 
+        spellcheck="false" 
+        aria-label="Terminal command input"
+        autofocus
+      >
     </div>
-  </main>
+  </div>
 
   <script src="script.js"></script>
 </body>
