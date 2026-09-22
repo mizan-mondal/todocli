@@ -1,10 +1,9 @@
 /**
- * todocli Minimalist Terminal Controller
+ * todocli — Web-Based Command-Line Interface Task Manager
+ * Stateless Architecture: Every command contains `<username> <password> <operation>`
  */
 
 const API_BASE = 'http://localhost:8080/api';
-let currentUser = localStorage.getItem('todocli_user') || 'guest';
-let tasks = [];
 let commandHistory = JSON.parse(localStorage.getItem('todocli_history') || '[]');
 let historyIndex = -1;
 let isBackendOnline = false;
@@ -12,68 +11,37 @@ let isBackendOnline = false;
 // DOM Elements
 const cliInput = document.getElementById('cli-input');
 const terminalHistory = document.getElementById('terminal-history');
-const promptUser = document.getElementById('prompt-user');
-const terminalScreen = document.getElementById('terminal-screen');
 
 document.addEventListener('DOMContentLoaded', () => {
-  updateUser(currentUser);
   checkBackendHealth();
-  loadLocalTasks();
 
   // Focus input automatically and on any screen click
-  cliInput.focus();
-  document.addEventListener('click', () => {
+  if (cliInput) {
     cliInput.focus();
-  });
-
-  cliInput.addEventListener('keydown', handleKeydown);
-});
-
-function updateUser(username) {
-  currentUser = username;
-  localStorage.setItem('todocli_user', username);
-  if (promptUser) {
-    promptUser.textContent = `${username}@todocli`;
+    cliInput.addEventListener('keydown', handleKeydown);
   }
-}
+
+  document.addEventListener('click', () => {
+    if (cliInput) cliInput.focus();
+  });
+});
 
 async function checkBackendHealth() {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1500);
-    const res = await fetch(`${API_BASE}/tasks?username=${encodeURIComponent(currentUser)}`, {
+    const res = await fetch(`${API_BASE}/health`, {
       signal: controller.signal
     });
     clearTimeout(timer);
     if (res.ok) {
       isBackendOnline = true;
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        tasks = data;
-      }
       return;
     }
   } catch (e) {
-    // Offline, fallback to local
+    // Offline, will fallback to local engine
   }
   isBackendOnline = false;
-}
-
-function loadLocalTasks() {
-  const saved = localStorage.getItem(`todocli_tasks_${currentUser}`);
-  if (saved) {
-    try {
-      tasks = JSON.parse(saved);
-    } catch (e) {
-      tasks = [];
-    }
-  } else {
-    tasks = [];
-  }
-}
-
-function saveLocalTasks() {
-  localStorage.setItem(`todocli_tasks_${currentUser}`, JSON.stringify(tasks));
 }
 
 function handleKeydown(e) {
@@ -106,13 +74,13 @@ function handleKeydown(e) {
   }
 }
 
-const COMMANDS = ['help', 'add', 'list', 'ls', 'done', 'check', 'delete', 'rm', 'user', 'status', 'clear', 'cls'];
+const GLOBAL_COMMANDS = ['help', 'clear', 'cls'];
 function handleAutocomplete() {
   const val = cliInput.value.trim().toLowerCase();
   if (!val) return;
-  const match = COMMANDS.find(c => c.startsWith(val));
+  const match = GLOBAL_COMMANDS.find(c => c.startsWith(val));
   if (match) {
-    cliInput.value = match + ' ';
+    cliInput.value = match;
   }
 }
 
@@ -126,42 +94,26 @@ async function executeCommand() {
   historyIndex = -1;
   cliInput.value = '';
 
-  const parts = raw.split(/\s+/);
-  const action = parts[0].toLowerCase();
-  const arg = parts.slice(1).join(' ').trim();
+  const lower = raw.toLowerCase();
 
-  // Clear command
-  if (action === 'clear' || action === 'cls') {
+  // Instant screen clear
+  if (lower === 'clear' || lower === 'cls') {
     terminalHistory.innerHTML = '';
     window.scrollTo(0, document.body.scrollHeight);
     return;
   }
 
-  // User switch
-  if (action === 'user') {
-    if (!arg) {
-      appendHistory(raw, 'Usage: user <username>', 'error');
-      return;
-    }
-    updateUser(arg);
-    loadLocalTasks();
-    checkBackendHealth();
-    appendHistory(raw, `Switched user to @${arg}`, 'success');
-    return;
-  }
-
-  // Backend execution if online
+  // Attempt execution on backend service
   if (isBackendOnline) {
     try {
       const res = await fetch(`${API_BASE}/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: raw, username: currentUser })
+        body: JSON.stringify({ command: raw })
       });
       if (res.ok) {
         const data = await res.json();
         appendHistory(raw, data.output || '', data.success ? 'success' : 'error');
-        if (data.tasks) tasks = data.tasks;
         return;
       }
     } catch (e) {
@@ -169,122 +121,225 @@ async function executeCommand() {
     }
   }
 
-  // Local command fallback
-  executeLocal(raw, action, arg);
+  // Fallback to local execution engine
+  await executeLocal(raw);
 }
 
-function executeLocal(raw, action, arg) {
-  switch (action) {
-    case 'help':
-      const help = [
-        'todocli commands:',
-        '  add <task_name>     - Add a new task',
-        '  list / ls           - List all tasks',
-        '  done <task_id>      - Mark task as completed',
-        '  delete <task_id>    - Remove a task',
-        '  user <username>     - Switch user context',
-        '  status              - View system & storage info',
-        '  clear               - Clear terminal screen',
-        '  help                - Show this help manual'
-      ].join('\n');
-      appendHistory(raw, help);
-      break;
+/**
+ * Local Execution Engine (Stateless fallback matching backend behavior)
+ */
+async function executeLocal(raw) {
+  const lower = raw.toLowerCase();
 
-    case 'add':
-      if (!arg) {
-        appendHistory(raw, 'Error: Task description cannot be empty. Usage: add <task_name>', 'error');
-        return;
-      }
-      const nextId = tasks.length > 0 ? Math.max(...tasks.map(t => t.id || 0)) + 1 : 1;
-      const newTask = {
-        id: nextId,
-        username: currentUser,
-        taskName: arg,
-        completed: false,
-        createdAt: new Date().toISOString()
-      };
-      tasks.push(newTask);
-      saveLocalTasks();
-      appendHistory(raw, `✔ Task #${nextId} created: "${arg}"`, 'success');
-      break;
+  if (lower === 'help') {
+    const help = [
+      'todocli Commands:',
+      '  <username> <password> create',
+      '  <username> <password> list',
+      '  <username> <password> add task <task_name>',
+      '  <username> <password> delete task <task_number>',
+      '',
+      'Utilities:',
+      '  clear / cls         - Clear terminal screen',
+      '  help                - Display this manual'
+    ].join('\n');
+    appendHistory(raw, help);
+    return;
+  }
 
-    case 'list':
-    case 'ls':
+  // Parse command: username password <operation> [args...]
+  const tokens = raw.split(/\s+/);
+  if (tokens.length < 3) {
+    appendHistory(
+      raw,
+      'Error: Invalid command format.\nEvery command must start with: <username> <password> <operation> ...\nType \'help\' for available commands.',
+      'error'
+    );
+    return;
+  }
+
+  const username = tokens[0];
+  const password = tokens[1];
+  const operation = tokens[2].toLowerCase();
+  const remainderTokens = tokens.slice(3);
+
+  // Reject removed login command
+  if (operation === 'login') {
+    appendHistory(
+      raw,
+      'Error: The \'login\' command has been removed.\nEvery request is independently authenticated with \'<username> <password> <operation>\'.',
+      'error'
+    );
+    return;
+  }
+
+  // Account creation
+  if (operation === 'create') {
+    const users = getLocalUsers();
+    if (users[username]) {
+      appendHistory(raw, `Error: User '${username}' already exists.`, 'error');
+      return;
+    }
+
+    const salt = generateHexSalt();
+    const hash = await hashPassword(password, salt);
+    users[username] = { salt, hash, createdAt: new Date().toISOString() };
+    saveLocalUsers(users);
+
+    appendHistory(raw, `User '${username}' created successfully.`, 'success');
+    return;
+  }
+
+  // Authenticate user credentials
+  const users = getLocalUsers();
+  const user = users[username];
+  if (!user) {
+    appendHistory(raw, 'Authentication failed: Invalid username or password.', 'error');
+    return;
+  }
+
+  const computedHash = await hashPassword(password, user.salt);
+  if (computedHash !== user.hash) {
+    appendHistory(raw, 'Authentication failed: Invalid username or password.', 'error');
+    return;
+  }
+
+  // Execute authenticated operations
+  switch (operation) {
+    case 'list': {
+      const tasks = getLocalTasks(username);
       if (tasks.length === 0) {
-        appendHistory(raw, `No tasks found for @${currentUser}. Use 'add <task>' to create one.`);
+        appendHistory(raw, `No tasks found for user '${username}'.`);
         return;
       }
-      const lines = [`Tasks for @${currentUser}:`];
-      tasks.forEach(t => {
-        const status = t.completed ? '[DONE]' : '[TODO]';
-        lines.push(`  #${String(t.id).padEnd(3)} ${status.padEnd(6)} ${t.taskName}`);
-      });
+      const lines = tasks.map((t, idx) => `${idx + 1}. ${t.taskName}`);
       appendHistory(raw, lines.join('\n'));
       break;
+    }
 
-    case 'done':
-    case 'check':
-      if (!arg) {
-        appendHistory(raw, 'Usage: done <task_id>', 'error');
+    case 'add': {
+      if (remainderTokens.length === 0) {
+        appendHistory(raw, 'Error: Missing sub-command. Usage: <username> <password> add task <task_name>', 'error');
         return;
       }
-      const doneId = parseInt(arg, 10);
-      const target = tasks.find(t => t.id === doneId);
-      if (target) {
-        target.completed = true;
-        saveLocalTasks();
-        appendHistory(raw, `✔ Task #${doneId} completed: "${target.taskName}"`, 'success');
-      } else {
-        appendHistory(raw, `Error: Task #${arg} not found.`, 'error');
-      }
-      break;
-
-    case 'delete':
-    case 'rm':
-      if (!arg) {
-        appendHistory(raw, 'Usage: delete <task_id>', 'error');
+      const subCmd = remainderTokens[0].toLowerCase();
+      if (subCmd !== 'task') {
+        appendHistory(raw, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: <username> <password> add task <task_name>`, 'error');
         return;
       }
-      const delId = parseInt(arg, 10);
-      const exists = tasks.some(t => t.id === delId);
-      if (exists) {
-        tasks = tasks.filter(t => t.id !== delId);
-        saveLocalTasks();
-        appendHistory(raw, `✔ Task #${delId} deleted.`, 'success');
-      } else {
-        appendHistory(raw, `Error: Task #${arg} not found.`, 'error');
+      const taskName = remainderTokens.slice(1).join(' ').trim();
+      if (!taskName) {
+        appendHistory(raw, 'Error: Task description cannot be empty. Usage: <username> <password> add task <task_name>', 'error');
+        return;
       }
-      break;
 
-    case 'status':
-      const pending = tasks.filter(t => !t.completed).length;
-      const done = tasks.filter(t => t.completed).length;
-      const stat = [
-        `Status:       ONLINE (${isBackendOnline ? 'Spring Boot API' : 'Standalone Local Storage'})`,
-        `Active User:  @${currentUser}`,
-        `Total Tasks:  ${tasks.length} (${pending} pending, ${done} completed)`
-      ].join('\n');
-      appendHistory(raw, stat);
+      const tasks = getLocalTasks(username);
+      tasks.push({
+        id: Date.now(),
+        taskName,
+        createdAt: new Date().toISOString()
+      });
+      saveLocalTasks(username, tasks);
+      appendHistory(raw, `Task added: "${taskName}"`, 'success');
       break;
+    }
+
+    case 'delete': {
+      if (remainderTokens.length === 0) {
+        appendHistory(raw, 'Error: Missing sub-command. Usage: <username> <password> delete task <task_number>', 'error');
+        return;
+      }
+      const subCmd = remainderTokens[0].toLowerCase();
+      if (subCmd !== 'task') {
+        appendHistory(raw, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: <username> <password> delete task <task_number>`, 'error');
+        return;
+      }
+      const taskNumStr = remainderTokens[1];
+      if (!taskNumStr) {
+        appendHistory(raw, 'Error: Missing task number. Usage: <username> <password> delete task <task_number>', 'error');
+        return;
+      }
+
+      const taskNumber = parseInt(taskNumStr, 10);
+      if (isNaN(taskNumber) || taskNumber < 1) {
+        appendHistory(raw, `Error: Invalid task number '${taskNumStr}'. Must be a positive integer.`, 'error');
+        return;
+      }
+
+      const tasks = getLocalTasks(username);
+      if (taskNumber > tasks.length) {
+        appendHistory(raw, `Error: Task #${taskNumber} not found. Use '${username} ${password} list' to view current tasks.`, 'error');
+        return;
+      }
+
+      const deleted = tasks.splice(taskNumber - 1, 1)[0];
+      saveLocalTasks(username, tasks);
+      appendHistory(raw, `Task #${taskNumber} deleted: "${deleted.taskName}"`, 'success');
+      break;
+    }
 
     default:
-      appendHistory(raw, `Command not found: '${action}'. Type 'help' for available commands.`, 'error');
+      appendHistory(
+        raw,
+        `Error: Unknown operation '${operation}'. Allowed operations: create, list, add task, delete task. Type 'help' for usage.`,
+        'error'
+      );
       break;
   }
+}
+
+// Local Storage helpers
+function getLocalUsers() {
+  try {
+    return JSON.parse(localStorage.getItem('todocli_users') || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveLocalUsers(users) {
+  localStorage.setItem('todocli_users', JSON.stringify(users));
+}
+
+function getLocalTasks(username) {
+  try {
+    return JSON.parse(localStorage.getItem(`todocli_tasks_${username}`) || '[]');
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLocalTasks(username, tasks) {
+  localStorage.setItem(`todocli_tasks_${username}`, JSON.stringify(tasks));
+}
+
+// Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
+function generateHexSalt() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashPassword(password, hexSalt) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + ':' + hexSalt);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function appendHistory(cmd, output, type = '') {
   const entry = document.createElement('div');
   entry.className = 'history-entry';
-  
+
   entry.innerHTML = `
     <div class="history-command">
-      <span class="history-prompt">${currentUser}@todocli:~$</span>
+      <span class="history-prompt">todocli:~$</span>
       <span class="history-cmd-text">${escapeHtml(cmd)}</span>
     </div>
     ${output ? `<div class="history-output ${type}">${escapeHtml(output)}</div>` : ''}
   `;
-  
+
   terminalHistory.appendChild(entry);
   window.scrollTo(0, document.body.scrollHeight);
 }

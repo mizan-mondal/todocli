@@ -4,6 +4,7 @@ import com.example.cli.model.Task;
 import com.example.cli.model.User;
 import com.example.cli.repository.TaskRepository;
 import com.example.cli.repository.UserRepository;
+import com.example.cli.util.PasswordUtil;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -67,142 +68,187 @@ public class CommandController {
         }
     }
 
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, Object>> health() {
+        Map<String, Object> status = new HashMap<>();
+        status.put("status", "UP");
+        status.put("users", userRepository.count());
+        status.put("tasks", taskRepository.count());
+        return ResponseEntity.ok(status);
+    }
+
     @PostMapping("/command")
     public ResponseEntity<CommandResponse> executeCommand(@RequestBody CommandRequest request) {
         String raw = request.getCommand() != null ? request.getCommand().trim() : "";
-        String username = (request.getUsername() != null && !request.getUsername().isBlank())
-                ? request.getUsername().trim()
-                : "guest";
 
         if (raw.isEmpty()) {
-            return ResponseEntity.ok(new CommandResponse(true, "", taskRepository.findByUsername(username)));
+            return ResponseEntity.ok(new CommandResponse(true, "", null));
         }
 
-        String[] parts = raw.split("\\s+", 2);
-        String action = parts[0].toLowerCase();
-        String argument = parts.length > 1 ? parts[1].trim() : "";
+        // Global Utility Commands (no credentials required)
+        String lowerTrimmed = raw.toLowerCase();
+        if (lowerTrimmed.equals("clear") || lowerTrimmed.equals("cls")) {
+            return ResponseEntity.ok(new CommandResponse(true, "", null));
+        }
 
-        switch (action) {
-            case "help":
-                String helpText = String.join("\n",
-                        "Available CLI Commands:",
-                        "  add <task_name>     - Add a new task",
-                        "  list                - List all your tasks",
-                        "  done <task_id>      - Mark a task as completed",
-                        "  delete <task_id>    - Remove a task",
-                        "  clear               - Clear terminal screen",
-                        "  user <username>     - Switch or set active username",
-                        "  status              - View server & database statistics",
-                        "  help                - Display this manual"
-                );
-                return ResponseEntity.ok(new CommandResponse(true, helpText, taskRepository.findByUsername(username)));
+        if (lowerTrimmed.equals("help")) {
+            String helpText = String.join("\n",
+                    "todocli Commands:",
+                    "  <username> <password> create",
+                    "  <username> <password> list",
+                    "  <username> <password> add task <task_name>",
+                    "  <username> <password> delete task <task_number>",
+                    "",
+                    "Utilities:",
+                    "  clear / cls         - Clear terminal screen",
+                    "  help                - Display this manual"
+            );
+            return ResponseEntity.ok(new CommandResponse(true, helpText, null));
+        }
+
+        // Parse command line: username password <operation> [arguments...]
+        // Split on whitespace into at most 3 parts: username, password, remainder
+        String[] parts = raw.split("\\s+", 3);
+        if (parts.length < 3) {
+            return ResponseEntity.ok(new CommandResponse(false,
+                    "Error: Invalid command format.\nEvery command must start with: <username> <password> <operation> ...\nType 'help' for available commands.",
+                    null));
+        }
+
+        String username = parts[0];
+        String password = parts[1];
+        String remainder = parts[2].trim();
+
+        // Split remainder into operation and arguments
+        String[] remainderParts = remainder.split("\\s+", 2);
+        String operation = remainderParts[0].toLowerCase();
+        String opArgs = remainderParts.length > 1 ? remainderParts[1].trim() : "";
+
+        // Reject deprecated 'login' command
+        if (operation.equals("login")) {
+            return ResponseEntity.ok(new CommandResponse(false,
+                    "Error: The 'login' command has been removed.\nEvery request is independently authenticated with '<username> <password> <operation>'.",
+                    null));
+        }
+
+        // Account Creation: <username> <password> create
+        if (operation.equals("create")) {
+            if (userRepository.findByUsername(username).isPresent()) {
+                return ResponseEntity.ok(new CommandResponse(false,
+                        "Error: User '" + username + "' already exists.", null));
+            }
+
+            String salt = PasswordUtil.generateSalt();
+            String hash = PasswordUtil.hashPassword(password, salt);
+            User newUser = new User(username, hash, salt);
+            userRepository.save(newUser);
+
+            return ResponseEntity.ok(new CommandResponse(true,
+                    "User '" + username + "' created successfully.", null));
+        }
+
+        // For all other operations, authenticate user credentials
+        Optional<User> userOpt = userRepository.findByUsername(username);
+        if (userOpt.isEmpty() || !PasswordUtil.verifyPassword(password, userOpt.get().getPasswordSalt(), userOpt.get().getPasswordHash())) {
+            return ResponseEntity.ok(new CommandResponse(false,
+                    "Authentication failed: Invalid username or password.", null));
+        }
+
+        // User is authenticated for this request. Execute operation:
+        switch (operation) {
+            case "list":
+                List<Task> tasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                if (tasks.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(true,
+                            "No tasks found for user '" + username + "'.", tasks));
+                }
+
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < tasks.size(); i++) {
+                    Task t = tasks.get(i);
+                    sb.append(String.format("%d. %s", i + 1, t.getTaskName()));
+                    if (i < tasks.size() - 1) {
+                        sb.append("\n");
+                    }
+                }
+                return ResponseEntity.ok(new CommandResponse(true, sb.toString(), tasks));
 
             case "add":
-                if (argument.isEmpty()) {
-                    return ResponseEntity.ok(new CommandResponse(false, "Error: Task description cannot be empty. Usage: add <task_name>", null));
+                // Expect: add task <task_name>
+                if (opArgs.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing sub-command. Usage: <username> <password> add task <task_name>", null));
                 }
-                Task newTask = new Task(username, argument);
+
+                String[] addParts = opArgs.split("\\s+", 2);
+                String addKeyword = addParts[0].toLowerCase();
+                String taskName = addParts.length > 1 ? addParts[1].trim() : "";
+
+                if (!addKeyword.equals("task")) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Unknown sub-command '" + addKeyword + "'. Usage: <username> <password> add task <task_name>", null));
+                }
+
+                if (taskName.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Task description cannot be empty. Usage: <username> <password> add task <task_name>", null));
+                }
+
+                Task newTask = new Task(username, taskName);
                 taskRepository.save(newTask);
+                List<Task> currentTasksAfterAdd = taskRepository.findByUsernameOrderByIdAsc(username);
                 return ResponseEntity.ok(new CommandResponse(true,
-                        String.format("✔ Task #%d created: \"%s\" (assigned to @%s)", newTask.getId(), newTask.getTaskName(), username),
-                        taskRepository.findByUsername(username)));
-
-            case "list":
-            case "ls":
-                List<Task> tasks = taskRepository.findByUsernameOrderByCreatedAtDesc(username);
-                if (tasks.isEmpty()) {
-                    return ResponseEntity.ok(new CommandResponse(true, "No tasks found for user @" + username + ". Type 'add <task>' to create one.", tasks));
-                }
-                StringBuilder sb = new StringBuilder();
-                sb.append(String.format("Tasks for @%s (%d total):\n", username, tasks.size()));
-                for (Task t : tasks) {
-                    String status = t.isCompleted() ? "[DONE]" : "[TODO]";
-                    sb.append(String.format("  #%-3d %-6s %s\n", t.getId(), status, t.getTaskName()));
-                }
-                return ResponseEntity.ok(new CommandResponse(true, sb.toString().trim(), tasks));
-
-            case "done":
-            case "check":
-                if (argument.isEmpty()) {
-                    return ResponseEntity.ok(new CommandResponse(false, "Usage: done <task_id>", null));
-                }
-                try {
-                    Long id = Long.parseLong(argument);
-                    Optional<Task> opt = taskRepository.findById(id);
-                    if (opt.isPresent()) {
-                        Task task = opt.get();
-                        task.setCompleted(true);
-                        taskRepository.save(task);
-                        return ResponseEntity.ok(new CommandResponse(true,
-                                String.format("✔ Task #%d marked as completed: \"%s\"", task.getId(), task.getTaskName()),
-                                taskRepository.findByUsername(username)));
-                    } else {
-                        return ResponseEntity.ok(new CommandResponse(false, "Error: Task #" + id + " not found.", null));
-                    }
-                } catch (NumberFormatException e) {
-                    return ResponseEntity.ok(new CommandResponse(false, "Error: Invalid task ID: " + argument, null));
-                }
+                        String.format("Task added: \"%s\"", taskName), currentTasksAfterAdd));
 
             case "delete":
-            case "rm":
-                if (argument.isEmpty()) {
-                    return ResponseEntity.ok(new CommandResponse(false, "Usage: delete <task_id>", null));
-                }
-                try {
-                    Long id = Long.parseLong(argument);
-                    if (taskRepository.existsById(id)) {
-                        taskRepository.deleteById(id);
-                        return ResponseEntity.ok(new CommandResponse(true, "✔ Task #" + id + " deleted successfully.", taskRepository.findByUsername(username)));
-                    } else {
-                        return ResponseEntity.ok(new CommandResponse(false, "Error: Task #" + id + " not found.", null));
-                    }
-                } catch (NumberFormatException e) {
-                    return ResponseEntity.ok(new CommandResponse(false, "Error: Invalid task ID: " + argument, null));
+                // Expect: delete task <task_number>
+                if (opArgs.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing sub-command. Usage: <username> <password> delete task <task_number>", null));
                 }
 
-            case "status":
-                long totalTasks = taskRepository.count();
-                long userTasks = taskRepository.findByUsername(username).size();
-                String statusMsg = String.format("System Status: ONLINE\nActive User: @%s\nUser Tasks: %d\nGlobal Tasks in DB: %d",
-                        username, userTasks, totalTasks);
-                return ResponseEntity.ok(new CommandResponse(true, statusMsg, taskRepository.findByUsername(username)));
+                String[] delParts = opArgs.split("\\s+", 2);
+                String delKeyword = delParts[0].toLowerCase();
+                String taskNumStr = delParts.length > 1 ? delParts[1].trim() : "";
+
+                if (!delKeyword.equals("task")) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Unknown sub-command '" + delKeyword + "'. Usage: <username> <password> delete task <task_number>", null));
+                }
+
+                if (taskNumStr.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing task number. Usage: <username> <password> delete task <task_number>", null));
+                }
+
+                int taskNumber;
+                try {
+                    taskNumber = Integer.parseInt(taskNumStr);
+                } catch (NumberFormatException e) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Invalid task number '" + taskNumStr + "'. Must be a positive integer.", null));
+                }
+
+                List<Task> userTasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                if (taskNumber < 1 || taskNumber > userTasks.size()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            String.format("Error: Task #%d not found. Use '%s %s list' to view current tasks.",
+                                    taskNumber, username, password), null));
+                }
+
+                // Map 1-based display serial number to internal database task
+                Task targetTask = userTasks.get(taskNumber - 1);
+                taskRepository.delete(targetTask);
+
+                List<Task> remainingTasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                return ResponseEntity.ok(new CommandResponse(true,
+                        String.format("Task #%d deleted: \"%s\"", taskNumber, targetTask.getTaskName()),
+                        remainingTasks));
 
             default:
                 return ResponseEntity.ok(new CommandResponse(false,
-                        "Unknown command: '" + action + "'. Type 'help' to see available commands.", null));
+                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, list, add task, delete task. Type 'help' for usage.",
+                        null));
         }
-    }
-
-    // Direct REST endpoints
-    @GetMapping("/tasks")
-    public List<Task> getTasks(@RequestParam(required = false, defaultValue = "guest") String username) {
-        return taskRepository.findByUsernameOrderByCreatedAtDesc(username);
-    }
-
-    @PostMapping("/tasks")
-    public Task createTask(@RequestBody Task task) {
-        if (task.getUsername() == null || task.getUsername().isBlank()) {
-            task.setUsername("guest");
-        }
-        return taskRepository.save(task);
-    }
-
-    @PutMapping("/tasks/{id}/toggle")
-    public ResponseEntity<Task> toggleTask(@PathVariable Long id) {
-        return taskRepository.findById(id)
-                .map(t -> {
-                    t.setCompleted(!t.isCompleted());
-                    return ResponseEntity.ok(taskRepository.save(t));
-                })
-                .orElse(ResponseEntity.notFound().build());
-    }
-
-    @DeleteMapping("/tasks/{id}")
-    public ResponseEntity<Void> deleteTask(@PathVariable Long id) {
-        if (taskRepository.existsById(id)) {
-            taskRepository.deleteById(id);
-            return ResponseEntity.noContent().build();
-        }
-        return ResponseEntity.notFound().build();
     }
 }

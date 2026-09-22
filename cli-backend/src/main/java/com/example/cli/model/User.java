@@ -14,15 +14,21 @@ public class User {
     @Column(unique = true, nullable = false)
     private String username;
 
-    private String email;
+    @Column(nullable = false)
+    private String passwordHash;
+
+    @Column(nullable = false)
+    private String passwordSalt;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 
     public User() {
     }
 
-    public User(String username, String email) {
+    public User(String username, String passwordHash, String passwordSalt) {
         this.username = username;
-        this.email = email;
+        this.passwordHash = passwordHash;
+        this.passwordSalt = passwordSalt;
         this.createdAt = LocalDateTime.now();
     }
 
@@ -43,12 +49,20 @@ public class User {
         this.username = username;
     }
 
-    public String getEmail() {
-        return email;
+    public String getPasswordHash() {
+        return passwordHash;
     }
 
-    public void setEmail(String email) {
-        this.email = email;
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
+    public String getPasswordSalt() {
+        return passwordSalt;
+    }
+
+    public void setPasswordSalt(String passwordSalt) {
+        this.passwordSalt = passwordSalt;
     }
 
     public LocalDateTime getCreatedAt() {
