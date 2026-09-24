@@ -1,18 +1,19 @@
 /**
  * todocli — Web-Based Command-Line Interface Task Manager
- * Supports:
- * 1. Independent per-command authentication: `<username> <password> <operation> [args...]`
- * 2. Optional login/session authentication: `<username> <password> login` & `<username> <password> logout`
- *    - Saves session credentials in browser localStorage so future visits remain authenticated.
- *    - When logged in, simplified shortcut commands can be used (`list`, `add task <name>`, `delete task <num>`, `logout`, `whoami`).
+ * Standalone Browser Distribution with Supabase Postgres Cloud Database
+ *
+ * Design:
+ * - Users & Tasks: Stored exclusively in Supabase (accessible from anywhere).
+ * - Offline/Browser Storage: ONLY stores the login session credentials (`todocli_session`)
+ *   when a user runs `<username> <password> login`, so they remain logged in across visits.
  */
 
-const API_BASE = 'http://localhost:8080/api';
+const CONFIG_STORAGE_KEY = 'todocli_supabase_config';
 const SESSION_STORAGE_KEY = 'todocli_session';
 
+let supabaseClient = null;
 let commandHistory = JSON.parse(localStorage.getItem('todocli_history') || '[]');
 let historyIndex = -1;
-let isBackendOnline = false;
 
 // DOM Elements
 const cliInput = document.getElementById('cli-input');
@@ -20,9 +21,8 @@ const terminalHistory = document.getElementById('terminal-history');
 
 document.addEventListener('DOMContentLoaded', () => {
   updatePrompt();
-  checkBackendHealth();
+  showWelcomeNotice();
 
-  // Focus input automatically and on any screen click
   if (cliInput) {
     cliInput.focus();
     cliInput.addEventListener('keydown', handleKeydown);
@@ -33,7 +33,68 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Session Management Helpers (Browser persistence)
+function getSupabaseConfig() {
+  try {
+    const stored = localStorage.getItem(CONFIG_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.url && parsed.key) {
+        return { url: parsed.url.trim(), key: parsed.key.trim() };
+      }
+    }
+  } catch (e) {}
+  return { url: '', key: '' };
+}
+
+function isSupabaseConfigured() {
+  const config = getSupabaseConfig();
+  return Boolean(config.url && config.key);
+}
+
+function getSupabase() {
+  if (supabaseClient) return supabaseClient;
+  const config = getSupabaseConfig();
+  if (config.url && config.key && window.supabase && window.supabase.createClient) {
+    supabaseClient = window.supabase.createClient(config.url, config.key);
+    return supabaseClient;
+  }
+  return null;
+}
+
+function setSupabaseConfig(url, key) {
+  const cleanUrl = url.trim();
+  const cleanKey = key.trim();
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({ url: cleanUrl, key: cleanKey }));
+  if (window.supabase && window.supabase.createClient) {
+    supabaseClient = window.supabase.createClient(cleanUrl, cleanKey);
+  }
+}
+
+function clearSupabaseConfig() {
+  localStorage.removeItem(CONFIG_STORAGE_KEY);
+  supabaseClient = null;
+}
+
+function showWelcomeNotice() {
+  if (!isSupabaseConfigured()) {
+    appendSystemNotice(
+      '⚠️  Supabase is not configured yet.\n' +
+      'To access your tasks from anywhere, configure your project:\n' +
+      'Run: config supabase <SUPABASE_URL> <SUPABASE_ANON_KEY>\n' +
+      'Type \'help\' for all available commands.'
+    );
+  } else {
+    const config = getSupabaseConfig();
+    try {
+      const hostname = new URL(config.url).hostname;
+      appendSystemNotice(`⚡ Connected to Supabase Database (${hostname})`);
+    } catch (e) {
+      appendSystemNotice('⚡ Connected to Supabase Cloud Database');
+    }
+  }
+}
+
+// Session Management Helpers (Browser persistence ONLY for login session)
 function getSession() {
   try {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -63,24 +124,6 @@ function updatePrompt() {
   if (promptUser) {
     promptUser.textContent = session && session.username ? session.username : 'todocli';
   }
-}
-
-async function checkBackendHealth() {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1500);
-    const res = await fetch(`${API_BASE}/health`, {
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      isBackendOnline = true;
-      return;
-    }
-  } catch (e) {
-    // Offline, will fallback to local engine
-  }
-  isBackendOnline = false;
 }
 
 function handleKeydown(e) {
@@ -119,8 +162,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'add task ', 'delete task ', 'logout', 'whoami']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'add task ', 'delete task '];
+    ? ['help', 'clear', 'cls', 'list', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'add task ', 'delete task ', 'config supabase '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -130,22 +173,25 @@ function handleAutocomplete() {
 
 function getHelpText() {
   return [
-    'todocli Commands:',
-    '  <username> <password> create                   - Register a new account',
-    '  <username> <password> login                    - Log in and save session in browser',
-    '  <username> <password> logout                   - Log out and clear session',
-    '  <username> <password> list                     - List all tasks',
-    '  <username> <password> add task <task_name>     - Add a new task',
-    '  <username> <password> delete task <task_number>- Delete a task by number',
+    'todocli Commands (Cloud-Synced via Supabase):',
+    '  <username> <password> create                   - Register a new account in Supabase',
+    '  <username> <password> login                    - Log in & store session offline in browser',
+    '  <username> <password> logout                   - Log out & clear browser session',
+    '  <username> <password> list                     - List all tasks from Supabase',
+    '  <username> <password> add task <task_name>     - Add task to Supabase',
+    '  <username> <password> delete task <task_number>- Delete task from Supabase',
     '',
     'When Logged In (Shortcut Commands):',
     '  list                                           - List your tasks',
     '  add task <task_name>                           - Add a new task',
-    '  delete task <task_number>                      - Delete a task by number',
-    '  whoami                                         - Show current logged-in user',
-    '  logout                                         - Log out and clear session',
+    '  delete task <task_number>                      - Delete task by number',
+    '  whoami                                         - Show active logged-in user',
+    '  logout                                         - Log out active session',
     '',
-    'Utilities:',
+    'Configuration & Utilities:',
+    '  config supabase <url> <anon_key>               - Set Supabase credentials',
+    '  config supabase status                         - View Supabase connection status',
+    '  config supabase clear                          - Clear stored browser Supabase credentials',
     '  clear / cls                                    - Clear terminal screen',
     '  help                                           - Display this manual'
   ].join('\n');
@@ -187,12 +233,18 @@ async function executeCommand() {
     return;
   }
 
+  // Handle Supabase configuration commands
+  if (lower.startsWith('config supabase') || lower === 'supabase status') {
+    handleSupabaseConfigCommand(raw, activePrompt);
+    return;
+  }
+
   // Parse command tokens
   const tokens = raw.split(/\s+/);
   const firstTokenLower = tokens[0].toLowerCase();
 
-  // Handle shortcut commands when logged in or typed without credentials
-  let commandToSend = raw;
+  // Handle shortcut commands when logged in
+  let commandToRun = raw;
   const isShortcut = ['list', 'add', 'delete', 'logout'].includes(firstTokenLower);
 
   if (isShortcut) {
@@ -205,58 +257,95 @@ async function executeCommand() {
       );
       return;
     }
-    // Expand shortcut command with logged-in user credentials
-    commandToSend = `${session.username} ${session.password} ${raw}`;
+    commandToRun = `${session.username} ${session.password} ${raw}`;
   }
 
-  // Attempt execution on backend service
-  if (isBackendOnline) {
-    try {
-      const res = await fetch(`${API_BASE}/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: commandToSend })
-      });
-      if (res.ok) {
-        const data = await res.json();
-
-        // Handle login / logout session side effects if successful
-        const sentTokens = commandToSend.split(/\s+/);
-        if (sentTokens.length >= 3) {
-          const op = sentTokens[2].toLowerCase();
-          if (data.success) {
-            if (op === 'login') {
-              saveSession({ username: sentTokens[0], password: sentTokens[1] });
-            } else if (op === 'logout') {
-              clearSession();
-            }
-          }
-        }
-
-        appendHistory(raw, data.output || '', data.success ? 'success' : 'error', activePrompt);
-        return;
-      }
-    } catch (e) {
-      isBackendOnline = false;
-    }
-  }
-
-  // Fallback to local execution engine
-  await executeLocal(commandToSend, raw, activePrompt);
-}
-
-/**
- * Local Execution Engine (Fallback matching backend behavior)
- */
-async function executeLocal(commandToRun, displayCmd, activePrompt) {
-  const lower = commandToRun.toLowerCase();
-
-  if (lower === 'help') {
-    appendHistory(displayCmd, getHelpText(), '', activePrompt);
+  if (!isSupabaseConfigured()) {
+    appendHistory(
+      raw,
+      'Error: Supabase is not configured.\n' +
+      'Run in terminal: config supabase <SUPABASE_URL> <SUPABASE_ANON_KEY>\n' +
+      'See supabase/schema.sql for the database setup script.',
+      'error',
+      activePrompt
+    );
     return;
   }
 
-  // Parse command: username password <operation> [args...]
+  await executeDatabaseCommand(commandToRun, raw, activePrompt);
+}
+
+function handleSupabaseConfigCommand(raw, activePrompt) {
+  const parts = raw.split(/\s+/);
+
+  if (parts.length === 2 || (parts.length === 3 && parts[2].toLowerCase() === 'status')) {
+    const config = getSupabaseConfig();
+    if (config.url && config.key) {
+      const maskedKey = config.key.length > 12 
+        ? `${config.key.substring(0, 8)}...${config.key.substring(config.key.length - 4)}` 
+        : '***';
+      appendHistory(
+        raw,
+        `Supabase Configuration:\n  Status: Connected\n  URL: ${config.url}\n  Anon Key: ${maskedKey}`,
+        'success',
+        activePrompt
+      );
+    } else {
+      appendHistory(
+        raw,
+        'Supabase Configuration:\n  Status: Not configured\n  Usage: config supabase <URL> <ANON_KEY>',
+        'error',
+        activePrompt
+      );
+    }
+    return;
+  }
+
+  if (parts.length === 3 && parts[2].toLowerCase() === 'clear') {
+    clearSupabaseConfig();
+    appendHistory(raw, 'Browser-stored Supabase credentials cleared.', 'success', activePrompt);
+    return;
+  }
+
+  if (parts.length >= 4) {
+    const url = parts[2];
+    const key = parts[3];
+    try {
+      new URL(url);
+    } catch (e) {
+      appendHistory(raw, `Error: '${url}' is not a valid URL. Example: https://xyz.supabase.co`, 'error', activePrompt);
+      return;
+    }
+
+    setSupabaseConfig(url, key);
+    appendHistory(
+      raw,
+      `Supabase configured successfully!\nConnected to: ${url}\nStored in browser configuration.`,
+      'success',
+      activePrompt
+    );
+    return;
+  }
+
+  appendHistory(raw, 'Usage: config supabase <URL> <ANON_KEY>\nOr: config supabase status\nOr: config supabase clear', 'error', activePrompt);
+}
+
+// Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
+function generateHexSalt() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashPassword(password, hexSalt) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + ':' + hexSalt);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   const tokens = commandToRun.split(/\s+/);
   if (tokens.length < 3) {
     appendHistory(
@@ -273,172 +362,205 @@ async function executeLocal(commandToRun, displayCmd, activePrompt) {
   const operation = tokens[2].toLowerCase();
   const remainderTokens = tokens.slice(3);
 
-  // Account creation
-  if (operation === 'create') {
-    const users = getLocalUsers();
-    if (users[username]) {
-      appendHistory(displayCmd, `Error: User '${username}' already exists.`, 'error', activePrompt);
+  const supabase = getSupabase();
+  if (!supabase) {
+    appendHistory(displayCmd, 'Error: Supabase client could not be initialized.', 'error', activePrompt);
+    return;
+  }
+
+  try {
+    if (operation === 'create') {
+      const { data: existing, error: checkError } = await supabase
+        .from('users')
+        .select('username')
+        .eq('username', username)
+        .maybeSingle();
+
+      if (checkError) {
+        appendHistory(displayCmd, `Database Error: ${checkError.message}`, 'error', activePrompt);
+        return;
+      }
+
+      if (existing) {
+        appendHistory(displayCmd, `Error: User '${username}' already exists.`, 'error', activePrompt);
+        return;
+      }
+
+      const salt = generateHexSalt();
+      const hash = await hashPassword(password, salt);
+
+      const { error: insertError } = await supabase
+        .from('users')
+        .insert([{ username, password_hash: hash, password_salt: salt }]);
+
+      if (insertError) {
+        appendHistory(displayCmd, `Database Error: ${insertError.message}`, 'error', activePrompt);
+        return;
+      }
+
+      appendHistory(displayCmd, `User '${username}' created successfully in Supabase.`, 'success', activePrompt);
       return;
     }
 
-    const salt = generateHexSalt();
-    const hash = await hashPassword(password, salt);
-    users[username] = { salt, hash, createdAt: new Date().toISOString() };
-    saveLocalUsers(users);
+    // Authenticate user credentials
+    const { data: user, error: authError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .maybeSingle();
 
-    appendHistory(displayCmd, `User '${username}' created successfully.`, 'success', activePrompt);
-    return;
-  }
-
-  // Authenticate user credentials
-  const users = getLocalUsers();
-  const user = users[username];
-  if (!user) {
-    appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
-    return;
-  }
-
-  const computedHash = await hashPassword(password, user.salt);
-  if (computedHash !== user.hash) {
-    appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
-    return;
-  }
-
-  // Execute authenticated operations
-  switch (operation) {
-    case 'login': {
-      saveSession({ username, password });
-      appendHistory(displayCmd, `User '${username}' logged in successfully.`, 'success', activePrompt);
-      break;
+    if (authError) {
+      appendHistory(displayCmd, `Database Error: ${authError.message}`, 'error', activePrompt);
+      return;
     }
 
-    case 'logout': {
-      clearSession();
-      appendHistory(displayCmd, `User '${username}' logged out successfully.`, 'success', activePrompt);
-      break;
+    if (!user) {
+      appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
+      return;
     }
 
-    case 'list': {
-      const tasks = getLocalTasks(username);
-      if (tasks.length === 0) {
-        appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
-        return;
-      }
-      const lines = tasks.map((t, idx) => `${idx + 1}. ${t.taskName}`);
-      appendHistory(displayCmd, lines.join('\n'), '', activePrompt);
-      break;
+    const computedHash = await hashPassword(password, user.password_salt);
+    if (computedHash !== user.password_hash) {
+      appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
+      return;
     }
 
-    case 'add': {
-      if (remainderTokens.length === 0) {
-        appendHistory(displayCmd, 'Error: Missing sub-command. Usage: <username> <password> add task <task_name>', 'error', activePrompt);
-        return;
-      }
-      const subCmd = remainderTokens[0].toLowerCase();
-      if (subCmd !== 'task') {
-        appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: <username> <password> add task <task_name>`, 'error', activePrompt);
-        return;
-      }
-      const taskName = remainderTokens.slice(1).join(' ').trim();
-      if (!taskName) {
-        appendHistory(displayCmd, 'Error: Task description cannot be empty. Usage: <username> <password> add task <task_name>', 'error', activePrompt);
-        return;
+    switch (operation) {
+      case 'login': {
+        saveSession({ username, password });
+        appendHistory(displayCmd, `User '${username}' logged in successfully.`, 'success', activePrompt);
+        break;
       }
 
-      const tasks = getLocalTasks(username);
-      tasks.push({
-        id: Date.now(),
-        taskName,
-        createdAt: new Date().toISOString()
-      });
-      saveLocalTasks(username, tasks);
-      appendHistory(displayCmd, `Task added: "${taskName}"`, 'success', activePrompt);
-      break;
+      case 'logout': {
+        clearSession();
+        appendHistory(displayCmd, `User '${username}' logged out successfully.`, 'success', activePrompt);
+        break;
+      }
+
+      case 'list': {
+        const { data: tasks, error: listError } = await supabase
+          .from('tasks')
+          .select('id, task_name')
+          .eq('username', username)
+          .order('id', { ascending: true });
+
+        if (listError) {
+          appendHistory(displayCmd, `Database Error: ${listError.message}`, 'error', activePrompt);
+          return;
+        }
+
+        if (!tasks || tasks.length === 0) {
+          appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
+          return;
+        }
+
+        const lines = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`);
+        appendHistory(displayCmd, lines.join('\n'), '', activePrompt);
+        break;
+      }
+
+      case 'add': {
+        if (remainderTokens.length === 0) {
+          appendHistory(displayCmd, 'Error: Missing sub-command. Usage: add task <task_name>', 'error', activePrompt);
+          return;
+        }
+        const subCmd = remainderTokens[0].toLowerCase();
+        if (subCmd !== 'task') {
+          appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: add task <task_name>`, 'error', activePrompt);
+          return;
+        }
+        const taskName = remainderTokens.slice(1).join(' ').trim();
+        if (!taskName) {
+          appendHistory(displayCmd, 'Error: Task description cannot be empty. Usage: add task <task_name>', 'error', activePrompt);
+          return;
+        }
+
+        const { error: addError } = await supabase
+          .from('tasks')
+          .insert([{ username, task_name: taskName }]);
+
+        if (addError) {
+          appendHistory(displayCmd, `Database Error: ${addError.message}`, 'error', activePrompt);
+          return;
+        }
+
+        appendHistory(displayCmd, `Task added: "${taskName}"`, 'success', activePrompt);
+        break;
+      }
+
+      case 'delete': {
+        if (remainderTokens.length === 0) {
+          appendHistory(displayCmd, 'Error: Missing sub-command. Usage: delete task <task_number>', 'error', activePrompt);
+          return;
+        }
+        const subCmd = remainderTokens[0].toLowerCase();
+        if (subCmd !== 'task') {
+          appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: delete task <task_number>`, 'error', activePrompt);
+          return;
+        }
+        const taskNumStr = remainderTokens[1];
+        if (!taskNumStr) {
+          appendHistory(displayCmd, 'Error: Missing task number. Usage: delete task <task_number>', 'error', activePrompt);
+          return;
+        }
+
+        const taskNumber = parseInt(taskNumStr, 10);
+        if (isNaN(taskNumber) || taskNumber < 1) {
+          appendHistory(displayCmd, `Error: Invalid task number '${taskNumStr}'. Must be a positive integer.`, 'error', activePrompt);
+          return;
+        }
+
+        const { data: tasks, error: fetchError } = await supabase
+          .from('tasks')
+          .select('id, task_name')
+          .eq('username', username)
+          .order('id', { ascending: true });
+
+        if (fetchError) {
+          appendHistory(displayCmd, `Database Error: ${fetchError.message}`, 'error', activePrompt);
+          return;
+        }
+
+        if (!tasks || taskNumber > tasks.length) {
+          appendHistory(displayCmd, `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
+          return;
+        }
+
+        const targetTask = tasks[taskNumber - 1];
+        const { error: delError } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', targetTask.id);
+
+        if (delError) {
+          appendHistory(displayCmd, `Database Error: ${delError.message}`, 'error', activePrompt);
+          return;
+        }
+
+        appendHistory(displayCmd, `Task #${taskNumber} deleted: "${targetTask.task_name}"`, 'success', activePrompt);
+        break;
+      }
+
+      default:
+        appendHistory(
+          displayCmd,
+          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, add task, delete task. Type 'help' for usage.`,
+          'error',
+          activePrompt
+        );
+        break;
     }
-
-    case 'delete': {
-      if (remainderTokens.length === 0) {
-        appendHistory(displayCmd, 'Error: Missing sub-command. Usage: <username> <password> delete task <task_number>', 'error', activePrompt);
-        return;
-      }
-      const subCmd = remainderTokens[0].toLowerCase();
-      if (subCmd !== 'task') {
-        appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: <username> <password> delete task <task_number>`, 'error', activePrompt);
-        return;
-      }
-      const taskNumStr = remainderTokens[1];
-      if (!taskNumStr) {
-        appendHistory(displayCmd, 'Error: Missing task number. Usage: <username> <password> delete task <task_number>', 'error', activePrompt);
-        return;
-      }
-
-      const taskNumber = parseInt(taskNumStr, 10);
-      if (isNaN(taskNumber) || taskNumber < 1) {
-        appendHistory(displayCmd, `Error: Invalid task number '${taskNumStr}'. Must be a positive integer.`, 'error', activePrompt);
-        return;
-      }
-
-      const tasks = getLocalTasks(username);
-      if (taskNumber > tasks.length) {
-        appendHistory(displayCmd, `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
-        return;
-      }
-
-      const deleted = tasks.splice(taskNumber - 1, 1)[0];
-      saveLocalTasks(username, tasks);
-      appendHistory(displayCmd, `Task #${taskNumber} deleted: "${deleted.taskName}"`, 'success', activePrompt);
-      break;
-    }
-
-    default:
-      appendHistory(
-        displayCmd,
-        `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, add task, delete task. Type 'help' for usage.`,
-        'error',
-        activePrompt
-      );
-      break;
+  } catch (err) {
+    appendHistory(displayCmd, `Database Error: ${err.message}`, 'error', activePrompt);
   }
 }
 
-// Local Storage helpers
-function getLocalUsers() {
-  try {
-    return JSON.parse(localStorage.getItem('todocli_users') || '{}');
-  } catch (e) {
-    return {};
-  }
-}
-
-function saveLocalUsers(users) {
-  localStorage.setItem('todocli_users', JSON.stringify(users));
-}
-
-function getLocalTasks(username) {
-  try {
-    return JSON.parse(localStorage.getItem(`todocli_tasks_${username}`) || '[]');
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveLocalTasks(username, tasks) {
-  localStorage.setItem(`todocli_tasks_${username}`, JSON.stringify(tasks));
-}
-
-// Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
-function generateHexSalt() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function hashPassword(password, hexSalt) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + ':' + hexSalt);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+function appendSystemNotice(message) {
+  const entry = document.createElement('div');
+  entry.className = 'history-entry system-notice';
+  entry.innerHTML = `<div class="history-output" style="color: #94a3b8; font-size: 13.5px; border-left: 2px solid #3b82f6; padding-left: 8px; margin-bottom: 12px;">${escapeHtml(message)}</div>`;
+  terminalHistory.appendChild(entry);
 }
 
 function appendHistory(cmd, output, type = '', promptLabel = null) {

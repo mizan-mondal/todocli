@@ -1,26 +1,24 @@
 # todocli &mdash; Web-Based Command-Line To-Do List
 
-A web-based command-line interface (CLI) for a to-do list application featuring an authentic terminal interface and a Java Spring Boot backend with H2 database persistence.
+A web-based command-line interface (CLI) for a to-do list application powered by a **Supabase PostgreSQL Cloud Database** to access your tasks from anywhere, featuring an authentic terminal interface and browser-only session persistence.
 
 ---
 
-## 🔑 Key Design Principle & Authentication Model
+## 🔑 Key Design Principle & Cloud Storage Architecture
 
-> **Supports both per-command credentials and optional browser-persisted login sessions.**
+> **All application data (users, tasks) lives in Supabase Cloud PostgreSQL. The browser ONLY stores the active login session locally offline.**
 
-- **Per-command credentials**: You can run any command directly with:
-  ```text
-  username password <operation> [sub-command] [data]
-  ```
-- **Optional Login & Browser Persistence**:
-  - Typing `<username> <password> login` authenticates and saves the login session in the browser (`localStorage`).
-  - On future browser visits or refreshes, the session remains active automatically so you don't have to log in again.
-  - The terminal prompt dynamically updates from `todocli:~$` to `<username>:~$`.
-  - While logged in, convenient shortcut commands are enabled (`list`, `add task <name>`, `delete task <number>`, `whoami`, `logout`).
+- **Accessible from Anywhere**: Your tasks and accounts are stored in Supabase in the cloud, allowing you to access and manage your tasks from any device or browser.
+- **Zero Local Data Hoarding**: Tasks and user accounts are **never** stored in browser storage. Every `list`, `add task`, and `delete task` command operates directly against Supabase.
+- **Browser-Only Offline Session Persistence**:
+  - Typing `<username> <password> login` validates your credentials with Supabase and stores **only** the login session (`todocli_session`) in the browser (`localStorage`).
+  - When returning to the terminal or refreshing the page, your session is remembered without needing to re-login.
+  - The terminal prompt dynamically displays `<username>:~$`.
+  - While logged in, shortcut commands (`list`, `add task <name>`, `delete task <number>`, `whoami`, `logout`) are available without re-typing credentials.
 - **Logout**:
   - Typing `<username> <password> logout` or `logout` clears the session from browser storage and restores the prompt to `todocli:~$`.
-- **Security & Password Hashing**: Plaintext passwords are never stored. The database stores salted password hashes (PBKDF2 with 65,536 iterations and a 16-byte cryptographically secure random salt in backend, and Web Crypto salted SHA-256 in local fallback).
-- **Display Numbers vs. Database IDs**: When listing tasks, tasks are ordered deterministically and assigned 1-based serial numbers (`1., 2., 3. ...`). Deleting a task uses this serial number, which the application safely maps to internal database IDs.
+- **Security & Salted Password Hashing**: Plaintext passwords are never stored. The Supabase `users` table stores salted SHA-256 password hashes generated with cryptographically secure 16-byte random salts.
+- **Display Numbers vs. Database IDs**: Tasks are ordered deterministically and assigned 1-based serial numbers (`1., 2., 3. ...`). Deleting a task uses this serial number, which safely maps to internal database IDs.
 
 ---
 
@@ -28,29 +26,43 @@ A web-based command-line interface (CLI) for a to-do list application featuring 
 
 ```text
 todocli/
-├── cli-backend/                                  # Spring Boot REST API & Command Engine
-│   ├── pom.xml                                   # Maven configuration (Spring Boot 3.3.4, JPA, H2)
-│   └── src/
-│       ├── main/java/com/example/cli/
-│       │   ├── CliApplication.java               # Spring Boot entry point
-│       │   ├── controller/CommandController.java # CLI Command Controller with login/logout
-│       │   ├── model/Task.java                   # JPA Task entity
-│       │   ├── model/User.java                   # JPA User entity (username, passwordHash, passwordSalt)
-│       │   ├── repository/TaskRepository.java    # Spring Data JPA Task repository
-│       │   ├── repository/UserRepository.java    # Spring Data JPA User repository
-│       │   └── util/PasswordUtil.java            # PBKDF2 salted password hashing & verification
-│       └── test/java/com/example/cli/
-│           └── CommandControllerTest.java        # Comprehensive unit & integration tests
-├── cli-frontend/                                 # Standalone frontend distribution
+├── supabase/
+│   └── schema.sql                                # Supabase SQL schema (users, tasks, indexes, RLS policies)
+├── src/                                          # Frontend source files (Vite)
+│   ├── main.js                                   # Terminal controller & command dispatcher
+│   ├── supabase.js                               # Supabase client, queries, & salted crypto operations
+│   └── style.css                                 # Modern authentic terminal stylesheet
+├── cli-frontend/                                 # Standalone CDN distribution
 │   ├── index.html
 │   ├── script.js
 │   └── style.css
-├── src/                                          # Frontend source files (Vite)
-│   ├── main.js                                   # Terminal controller, session & fallback engine
-│   └── style.css                                 # Modern authentic terminal stylesheet
+├── cli-backend/                                  # Optional Java Spring Boot REST API & Command Engine
 ├── index.html                                    # Terminal web interface
+├── .env.example                                  # Environment variables template
 └── README.md
 ```
+
+---
+
+## ⚡ Setting Up Supabase
+
+### 1. Create a Supabase Project
+1. Go to [supabase.com](https://supabase.com) and create a free project.
+2. In the Supabase Dashboard, go to **SQL Editor** &rarr; **New Query**.
+3. Copy and run the SQL script located in [`supabase/schema.sql`](file:///c:/Users/mizan/Desktop/todocli/supabase/schema.sql). This creates the `users` and `tasks` tables, deterministic indexes, and RLS policies.
+
+### 2. Configure Credentials
+You can configure credentials in either of two ways:
+
+- **Option A (Environment Variables)**: Add your project credentials to `.env`:
+  ```env
+  VITE_SUPABASE_URL=https://your-project-id.supabase.co
+  VITE_SUPABASE_ANON_KEY=your-anon-key-here
+  ```
+- **Option B (Directly in the Terminal)**: Launch the app and run:
+  ```text
+  config supabase https://your-project-id.supabase.co your-anon-key-here
+  ```
 
 ---
 
@@ -58,19 +70,22 @@ todocli/
 
 | Command Syntax | Description | Example |
 |---|---|---|
-| `<username> <password> create` | Register a new user account (stores salted hash) | `mizan mypassword create` |
-| `<username> <password> login` | Log in and persist session credentials in the browser | `mizan mypassword login` |
-| `<username> <password> logout` | Log out and remove saved session credentials from browser | `mizan mypassword logout` |
-| `<username> <password> list` | List all tasks assigned to the user with serial numbers | `mizan mypassword list` |
-| `<username> <password> add task <task_name>` | Add a new task (spaces permitted in task description) | `mizan mypassword add task Buy groceries` |
-| `<username> <password> delete task <task_number>` | Delete a task using the 1-based serial number from `list` | `mizan mypassword delete task 4` |
+| `<username> <password> create` | Register a new user account in Supabase | `mizan mypassword create` |
+| `<username> <password> login` | Log in and persist session offline in browser | `mizan mypassword login` |
+| `<username> <password> logout` | Log out and clear browser session | `mizan mypassword logout` |
+| `<username> <password> list` | List all tasks from Supabase with serial numbers | `mizan mypassword list` |
+| `<username> <password> add task <task_name>` | Add a new task to Supabase | `mizan mypassword add task Buy groceries` |
+| `<username> <password> delete task <task_number>` | Delete a task from Supabase using serial number | `mizan mypassword delete task 4` |
 | **When Logged In (Shortcut Commands)** | | |
 | `list` | List tasks for the currently logged-in user | `list` |
 | `add task <task_name>` | Add a task for the currently logged-in user | `add task Buy coffee` |
 | `delete task <task_number>` | Delete a task using 1-based serial number | `delete task 2` |
-| `whoami` | Display the current logged-in user | `whoami` |
+| `whoami` | Display active logged-in user | `whoami` |
 | `logout` | Log out the active session | `logout` |
-| **Terminal Utilities** | | |
+| **Configuration & Utilities** | | |
+| `config supabase <url> <anon_key>` | Configure Supabase credentials in the terminal | `config supabase https://xyz.supabase.co eyJhb...` |
+| `config supabase status` | Check current Supabase connection status | `config supabase status` |
+| `config supabase clear` | Clear stored browser Supabase credentials | `config supabase clear` |
 | `clear` / `cls` | Clear the terminal display | `clear` |
 | `help` | Display the command usage manual | `help` |
 
@@ -78,21 +93,8 @@ todocli/
 
 ## 🚀 Getting Started
 
-### 1. Running the Backend (Spring Boot)
-Ensure Java 17+ is installed. In `cli-backend`:
-```bash
-mvn spring-boot:run
-```
-When running:
-- **API Base**: `http://localhost:8080/api`
-- **Command Endpoint**: `POST http://localhost:8080/api/command`
-- **H2 Web Console**: `http://localhost:8080/h2-console` (JDBC URL: `jdbc:h2:mem:tododb`)
-
-### 2. Running the Frontend
 Start the local dev server using Vite:
 ```bash
 npm run dev
 ```
-Or open `index.html` directly in any browser.
-
-> **Dual-Mode Sync**: If the backend is running, commands are sent directly to the Spring Boot service. If the backend is offline, the frontend provides a seamless local fallback utilizing browser Web Crypto API salted hashing and `localStorage`.
+Then open `http://localhost:5173/` in any browser.
