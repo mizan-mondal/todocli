@@ -30,7 +30,6 @@ const terminalHistory = document.getElementById('terminal-history');
 
 document.addEventListener('DOMContentLoaded', () => {
   updatePrompt();
-  showWelcomeNotice();
 
   if (cliInput) {
     cliInput.focus();
@@ -41,26 +40,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cliInput) cliInput.focus();
   });
 });
-
-function showWelcomeNotice() {
-  if (!isSupabaseConfigured()) {
-    appendSystemNotice(
-      '⚠️  Supabase is not configured yet.\n' +
-      'To access your tasks from anywhere:\n' +
-      '1. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file, OR\n' +
-      '2. Run: config supabase <SUPABASE_URL> <SUPABASE_ANON_KEY>\n' +
-      'Type \'help\' for all available commands.'
-    );
-  } else {
-    const config = getSupabaseConfig();
-    try {
-      const hostname = new URL(config.url).hostname;
-      appendSystemNotice(`⚡ Connected to Supabase Database (${hostname})`);
-    } catch (e) {
-      appendSystemNotice('⚡ Connected to Supabase Cloud Database');
-    }
-  }
-}
 
 // Session Management Helpers (Browser persistence ONLY for login session)
 function getSession() {
@@ -415,13 +394,6 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   } catch (err) {
     appendHistory(displayCmd, `Database Error: ${err.message}`, 'error', activePrompt);
   }
-}
-
-function appendSystemNotice(message) {
-  const entry = document.createElement('div');
-  entry.className = 'history-entry system-notice';
-  entry.innerHTML = `<div class="history-output" style="color: #94a3b8; font-size: 13.5px; border-left: 2px solid #3b82f6; padding-left: 8px; margin-bottom: 12px;">${escapeHtml(message)}</div>`;
-  terminalHistory.appendChild(entry);
 }
 
 function appendHistory(cmd, output, type = '', promptLabel = null) {

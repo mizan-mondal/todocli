@@ -91,10 +91,39 @@ You can configure credentials in either of two ways:
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started (Development)
 
 Start the local dev server using Vite:
 ```bash
 npm run dev
 ```
 Then open `http://localhost:5173/` in any browser.
+
+---
+
+## 🌐 Production Deployment
+
+Since **todocli** connects directly to your Supabase PostgreSQL cloud database, the frontend compiles into a completely static, high-performance web application bundle.
+
+### 1. Test the Production Build Locally
+Verify the production build works before deploying:
+```bash
+npm run build
+npm run preview
+```
+This builds into `dist/` and runs a local preview server on `http://localhost:4173/`.
+
+### 2. Deploy to Vercel
+1. Push your repository to GitHub.
+2. Go to [vercel.com](https://vercel.com) &rarr; **Add New Project** &rarr; Select this repository.
+3. In **Environment Variables**, add:
+   - `VITE_SUPABASE_URL`: `https://your-project-id.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY`: `your-anon-key`
+4. Click **Deploy**. Vercel will build and host your app with global edge CDN caching, instant deploys, and free automatic SSL.
+
+*(Alternatively, deploy directly from CLI: `npx vercel`)*
+
+### 🔒 Production Security Checklist
+- [x] **Never commit your `.env` file**: `.env` is already added to `.gitignore`. Always configure production secrets in your hosting platform's environment settings.
+- [x] **Row Level Security (RLS)**: Ensure you have executed `supabase/schema.sql` in your Supabase dashboard so tables are protected by RLS policies.
+- [x] **Client-Side Secret Safety**: Only the Supabase `anon` public key is bundled in the frontend. Never expose your Supabase `service_role` secret key.
