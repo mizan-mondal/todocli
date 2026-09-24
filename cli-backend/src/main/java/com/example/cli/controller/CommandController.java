@@ -94,14 +94,23 @@ public class CommandController {
         if (lowerTrimmed.equals("help")) {
             String helpText = String.join("\n",
                     "todocli Commands:",
-                    "  <username> <password> create",
-                    "  <username> <password> list",
-                    "  <username> <password> add task <task_name>",
-                    "  <username> <password> delete task <task_number>",
+                    "  <username> <password> create                   - Register a new account",
+                    "  <username> <password> login                    - Log in and save session in browser",
+                    "  <username> <password> logout                   - Log out and clear session",
+                    "  <username> <password> list                     - List all tasks",
+                    "  <username> <password> add task <task_name>     - Add a new task",
+                    "  <username> <password> delete task <task_number>- Delete a task by number",
+                    "",
+                    "When Logged In (Shortcut Commands):",
+                    "  list                                           - List your tasks",
+                    "  add task <task_name>                           - Add a new task",
+                    "  delete task <task_number>                      - Delete a task by number",
+                    "  whoami                                         - Show current logged-in user",
+                    "  logout                                         - Log out and clear session",
                     "",
                     "Utilities:",
-                    "  clear / cls         - Clear terminal screen",
-                    "  help                - Display this manual"
+                    "  clear / cls                                    - Clear terminal screen",
+                    "  help                                           - Display this manual"
             );
             return ResponseEntity.ok(new CommandResponse(true, helpText, null));
         }
@@ -111,7 +120,7 @@ public class CommandController {
         String[] parts = raw.split("\\s+", 3);
         if (parts.length < 3) {
             return ResponseEntity.ok(new CommandResponse(false,
-                    "Error: Invalid command format.\nEvery command must start with: <username> <password> <operation> ...\nType 'help' for available commands.",
+                    "Error: Invalid command format.\nEvery command must start with: <username> <password> <operation> ...\nOr log in using: <username> <password> login\nType 'help' for available commands.",
                     null));
         }
 
@@ -123,13 +132,6 @@ public class CommandController {
         String[] remainderParts = remainder.split("\\s+", 2);
         String operation = remainderParts[0].toLowerCase();
         String opArgs = remainderParts.length > 1 ? remainderParts[1].trim() : "";
-
-        // Reject deprecated 'login' command
-        if (operation.equals("login")) {
-            return ResponseEntity.ok(new CommandResponse(false,
-                    "Error: The 'login' command has been removed.\nEvery request is independently authenticated with '<username> <password> <operation>'.",
-                    null));
-        }
 
         // Account Creation: <username> <password> create
         if (operation.equals("create")) {
@@ -156,6 +158,14 @@ public class CommandController {
 
         // User is authenticated for this request. Execute operation:
         switch (operation) {
+            case "login":
+                return ResponseEntity.ok(new CommandResponse(true,
+                        "User '" + username + "' logged in successfully.", null));
+
+            case "logout":
+                return ResponseEntity.ok(new CommandResponse(true,
+                        "User '" + username + "' logged out successfully.", null));
+
             case "list":
                 List<Task> tasks = taskRepository.findByUsernameOrderByIdAsc(username);
                 if (tasks.isEmpty()) {
@@ -233,7 +243,7 @@ public class CommandController {
                 if (taskNumber < 1 || taskNumber > userTasks.size()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             String.format("Error: Task #%d not found. Use '%s %s list' to view current tasks.",
-                                    taskNumber, username, password), null));
+                                     taskNumber, username, password), null));
                 }
 
                 // Map 1-based display serial number to internal database task
@@ -247,7 +257,7 @@ public class CommandController {
 
             default:
                 return ResponseEntity.ok(new CommandResponse(false,
-                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, list, add task, delete task. Type 'help' for usage.",
+                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, add task, delete task. Type 'help' for usage.",
                         null));
         }
     }

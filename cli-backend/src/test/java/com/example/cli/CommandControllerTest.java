@@ -100,10 +100,35 @@ class CommandControllerTest {
     }
 
     @Test
-    void testDeprecatedLoginCommand() {
-        CommandResponse resp = sendCommand("mizan mypassword login");
-        assertFalse(resp.isSuccess());
-        assertTrue(resp.getOutput().contains("login"));
+    void testLoginAndLogoutCommands() {
+        // Login before user created should fail
+        CommandResponse respNotFound = sendCommand("mizan mypassword login");
+        assertFalse(respNotFound.isSuccess());
+        assertTrue(respNotFound.getOutput().contains("Authentication failed"));
+
+        // Create user
+        CommandResponse createResp = sendCommand("mizan mypassword create");
+        assertTrue(createResp.isSuccess());
+
+        // Login with wrong password should fail
+        CommandResponse respWrong = sendCommand("mizan wrongpass login");
+        assertFalse(respWrong.isSuccess());
+        assertTrue(respWrong.getOutput().contains("Authentication failed"));
+
+        // Login with correct credentials should succeed
+        CommandResponse loginResp = sendCommand("mizan mypassword login");
+        assertTrue(loginResp.isSuccess());
+        assertTrue(loginResp.getOutput().contains("logged in successfully"));
+
+        // Logout with wrong password should fail
+        CommandResponse logoutWrong = sendCommand("mizan wrongpass logout");
+        assertFalse(logoutWrong.isSuccess());
+        assertTrue(logoutWrong.getOutput().contains("Authentication failed"));
+
+        // Logout with correct credentials should succeed
+        CommandResponse logoutResp = sendCommand("mizan mypassword logout");
+        assertTrue(logoutResp.isSuccess());
+        assertTrue(logoutResp.getOutput().contains("logged out successfully"));
     }
 
     @Test
