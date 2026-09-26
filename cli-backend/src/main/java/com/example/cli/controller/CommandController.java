@@ -243,8 +243,8 @@ public class CommandController {
                 List<Task> userTasks = taskRepository.findByUsernameOrderByIdAsc(username);
                 if (taskNumber < 1 || taskNumber > userTasks.size()) {
                     return ResponseEntity.ok(new CommandResponse(false,
-                            String.format("Error: Task #%d not found. Use '%s %s list' to view current tasks.",
-                                     taskNumber, username, password), null));
+                            String.format("Error: Task #%d not found. Use '%s ******** list' to view current tasks.",
+                                     taskNumber, username), null));
                 }
 
                 // Map 1-based display serial number to internal database task

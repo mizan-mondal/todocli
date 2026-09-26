@@ -17,7 +17,36 @@ let historyIndex = -1;
 
 // DOM Elements
 const cliInput = document.getElementById('cli-input');
+const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
+
+const NON_CREDENTIAL_COMMANDS = new Set([
+  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'logout'
+]);
+
+/**
+ * Masks the password token with '*' characters for credential commands
+ * (e.g. '<username> <password> <operation> ...' -> '<username> ******** <operation> ...')
+ */
+function maskCommand(raw) {
+  if (!raw) return '';
+  const match = raw.match(/^(\s*)(\S+)(\s+)(\S+)(.*)$/);
+  if (!match) return raw;
+
+  const [, leading, firstToken, sep, secondToken, rest] = match;
+  if (NON_CREDENTIAL_COMMANDS.has(firstToken.toLowerCase())) {
+    return raw;
+  }
+
+  return leading + firstToken + sep + '*'.repeat(secondToken.length) + rest;
+}
+
+function updateInputDisplay() {
+  if (cliInputDisplay && cliInput) {
+    cliInputDisplay.textContent = maskCommand(cliInput.value);
+    cliInputDisplay.scrollLeft = cliInput.scrollLeft;
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   updatePrompt();
@@ -25,6 +54,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (cliInput) {
     cliInput.focus();
     cliInput.addEventListener('keydown', handleKeydown);
+    cliInput.addEventListener('input', updateInputDisplay);
+    cliInput.addEventListener('scroll', () => {
+      if (cliInputDisplay) cliInputDisplay.scrollLeft = cliInput.scrollLeft;
+    });
+    updateInputDisplay();
   }
 
   document.addEventListener('click', () => {
@@ -117,15 +151,18 @@ function handleKeydown(e) {
         historyIndex++;
       }
       cliInput.value = commandHistory[commandHistory.length - 1 - historyIndex] || '';
+      updateInputDisplay();
     }
   } else if (e.key === 'ArrowDown') {
     e.preventDefault();
     if (historyIndex > 0) {
       historyIndex--;
       cliInput.value = commandHistory[commandHistory.length - 1 - historyIndex] || '';
+      updateInputDisplay();
     } else if (historyIndex === 0) {
       historyIndex = -1;
       cliInput.value = '';
+      updateInputDisplay();
     }
   } else if (e.key === 'Tab') {
     e.preventDefault();
@@ -148,6 +185,7 @@ function handleAutocomplete() {
   const match = available.find(c => c.startsWith(val));
   if (match) {
     cliInput.value = match;
+    updateInputDisplay();
   }
 }
 
@@ -186,6 +224,7 @@ async function executeCommand() {
   localStorage.setItem('todocli_history', JSON.stringify(commandHistory));
   historyIndex = -1;
   cliInput.value = '';
+  updateInputDisplay();
 
   const lower = raw.toLowerCase();
 
@@ -544,10 +583,12 @@ function appendHistory(cmd, output, type = '', promptLabel = null) {
   const session = getSession();
   const label = promptLabel || (session && session.username ? `${session.username}:~$` : 'todocli:~$');
 
+  const maskedCmd = maskCommand(cmd);
+
   entry.innerHTML = `
     <div class="history-command">
       <span class="history-prompt">${escapeHtml(label)}</span>
-      <span class="history-cmd-text">${escapeHtml(cmd)}</span>
+      <span class="history-cmd-text">${escapeHtml(maskedCmd)}</span>
     </div>
     ${output ? `<div class="history-output ${type}">${escapeHtml(output)}</div>` : ''}
   `;

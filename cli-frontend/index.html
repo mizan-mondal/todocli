@@ -29,17 +29,20 @@
     <!-- Active Input Line -->
     <div class="prompt-line" id="prompt-line">
       <span class="prompt-text"><span class="prompt-user" id="prompt-user">todocli</span>:<span class="prompt-path">~</span>$</span>
-      <input 
-        type="text" 
-        id="cli-input" 
-        class="cli-input" 
-        autocomplete="off" 
-        autocorrect="off" 
-        autocapitalize="off" 
-        spellcheck="false" 
-        aria-label="Terminal command input"
-        autofocus
-      >
+      <div class="cli-input-wrapper">
+        <span class="cli-input-display" id="cli-input-display" aria-hidden="true"></span>
+        <input 
+          type="text" 
+          id="cli-input" 
+          class="cli-input" 
+          autocomplete="off" 
+          autocorrect="off" 
+          autocapitalize="off" 
+          spellcheck="false" 
+          aria-label="Terminal command input"
+          autofocus
+        >
+      </div>
     </div>
   </div>
 
