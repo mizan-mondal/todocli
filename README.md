@@ -73,11 +73,11 @@ You can configure credentials in either of two ways:
 | `<username> <password> create` | Register a new user account in Supabase | `mizan mypassword create` |
 | `<username> <password> login` | Log in and persist session offline in browser | `mizan mypassword login` |
 | `<username> <password> logout` | Log out and clear browser session | `mizan mypassword logout` |
-| `<username> <password> list` | List all tasks from Supabase with serial numbers | `mizan mypassword list` |
+| `<username> <password> list` / `ls` | List all tasks from Supabase with serial numbers | `mizan mypassword list` |
 | `<username> <password> add task <task_name>` | Add a new task to Supabase | `mizan mypassword add task Buy groceries` |
 | `<username> <password> delete task <task_number>` | Delete a task from Supabase using serial number | `mizan mypassword delete task 4` |
 | **When Logged In (Shortcut Commands)** | | |
-| `list` | List tasks for the currently logged-in user | `list` |
+| `list` / `ls` | List tasks for the currently logged-in user | `ls` |
 | `add task <task_name>` | Add a task for the currently logged-in user | `add task Buy coffee` |
 | `delete task <task_number>` | Delete a task using 1-based serial number | `delete task 2` |
 | `whoami` | Display active logged-in user | `whoami` |

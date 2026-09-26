@@ -97,12 +97,12 @@ public class CommandController {
                     "  <username> <password> create                   - Register a new account",
                     "  <username> <password> login                    - Log in and save session in browser",
                     "  <username> <password> logout                   - Log out and clear session",
-                    "  <username> <password> list                     - List all tasks",
+                    "  <username> <password> list / ls                - List all tasks",
                     "  <username> <password> add task <task_name>     - Add a new task",
                     "  <username> <password> delete task <task_number>- Delete a task by number",
                     "",
                     "When Logged In (Shortcut Commands):",
-                    "  list                                           - List your tasks",
+                    "  list / ls                                      - List your tasks",
                     "  add task <task_name>                           - Add a new task",
                     "  delete task <task_number>                      - Delete a task by number",
                     "  whoami                                         - Show current logged-in user",
@@ -166,6 +166,7 @@ public class CommandController {
                 return ResponseEntity.ok(new CommandResponse(true,
                         "User '" + username + "' logged out successfully.", null));
 
+            case "list":
             case "ls":
                 List<Task> tasks = taskRepository.findByUsernameOrderByIdAsc(username);
                 if (tasks.isEmpty()) {
@@ -257,7 +258,7 @@ public class CommandController {
 
             default:
                 return ResponseEntity.ok(new CommandResponse(false,
-                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, add task, delete task. Type 'help' for usage.",
+                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.",
                         null));
         }
     }

@@ -178,4 +178,33 @@ class CommandControllerTest {
         assertFalse(invalidDel.isSuccess());
         assertTrue(invalidDel.getOutput().contains("Task #4 not found"));
     }
+
+    @Test
+    void testListAndLsGiveSameResult() {
+        sendCommand("mizan mypassword create");
+
+        // Verify empty state: both list and ls return the same result
+        CommandResponse listEmpty = sendCommand("mizan mypassword list");
+        CommandResponse lsEmpty = sendCommand("mizan mypassword ls");
+        assertTrue(listEmpty.isSuccess());
+        assertTrue(lsEmpty.isSuccess());
+        assertEquals(listEmpty.getOutput(), lsEmpty.getOutput());
+        assertEquals("No tasks found for user 'mizan'.", lsEmpty.getOutput());
+
+        // Add tasks
+        sendCommand("mizan mypassword add task Buy groceries");
+        sendCommand("mizan mypassword add task Read book");
+
+        // Verify populated state: both list and ls return the exact same output and task list
+        CommandResponse listResp = sendCommand("mizan mypassword list");
+        CommandResponse lsResp = sendCommand("mizan mypassword ls");
+        assertTrue(listResp.isSuccess());
+        assertTrue(lsResp.isSuccess());
+        assertEquals(listResp.getOutput(), lsResp.getOutput());
+        assertEquals("1. Buy groceries\n2. Read book", lsResp.getOutput());
+        assertNotNull(lsResp.getTasks());
+        assertEquals(2, lsResp.getTasks().size());
+        assertEquals("Buy groceries", lsResp.getTasks().get(0).getTaskName());
+        assertEquals("Read book", lsResp.getTasks().get(1).getTaskName());
+    }
 }

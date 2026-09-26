@@ -142,8 +142,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'add task ', 'delete task ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'config supabase '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -157,12 +157,12 @@ function getHelpText() {
     '  <username> <password> create                   - Register a new account in Supabase',
     '  <username> <password> login                    - Log in & store session offline in browser',
     '  <username> <password> logout                   - Log out & clear browser session',
-    '  <username> <password> list                     - List all tasks from Supabase',
+    '  <username> <password> list / ls                - List all tasks from Supabase',
     '  <username> <password> add task <task_name>     - Add task to Supabase',
     '  <username> <password> delete task <task_number>- Delete task from Supabase',
     '',
     'When Logged In (Shortcut Commands):',
-    '  list                                           - List your tasks',
+    '  list / ls                                      - List your tasks',
     '  add task <task_name>                           - Add a new task',
     '  delete task <task_number>                      - Delete task by number',
     '  whoami                                         - Show active logged-in user',
@@ -225,7 +225,7 @@ async function executeCommand() {
 
   // Handle shortcut commands when logged in
   let commandToRun = raw;
-  const isShortcut = ['list', 'add', 'delete', 'logout'].includes(firstTokenLower);
+  const isShortcut = ['list', 'ls', 'add', 'delete', 'logout'].includes(firstTokenLower);
 
   if (isShortcut) {
     if (!session) {
@@ -418,7 +418,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
         break;
       }
 
-      case 'list': {
+      case 'list':
+      case 'ls': {
         const { data: tasks, error: listError } = await supabase
           .from('tasks')
           .select('id, task_name')
@@ -525,7 +526,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
       default:
         appendHistory(
           displayCmd,
-          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, add task, delete task. Type 'help' for usage.`,
+          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.`,
           'error',
           activePrompt
         );
