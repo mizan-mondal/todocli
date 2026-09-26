@@ -166,7 +166,7 @@ public class CommandController {
                 return ResponseEntity.ok(new CommandResponse(true,
                         "User '" + username + "' logged out successfully.", null));
 
-            case "list":
+            case "ls":
                 List<Task> tasks = taskRepository.findByUsernameOrderByIdAsc(username);
                 if (tasks.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(true,
