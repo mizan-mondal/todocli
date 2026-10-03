@@ -21,7 +21,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
 ]);
 
 /**
@@ -179,8 +179,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami', 'config supabase ']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'config supabase '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -198,11 +198,13 @@ function getHelpText() {
     '  <username> <password> list / ls                - List all tasks from Supabase',
     '  <username> <password> add task <task_name>     - Add task to Supabase',
     '  <username> <password> delete task <task_number>- Delete task from Supabase',
+    '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
     '  list / ls                                      - List your tasks',
     '  add task <task_name>                           - Add a new task',
     '  delete task <task_number>                      - Delete task by number',
+    '  priority <from> to <to>                        - Move task to new priority position',
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
     '',
@@ -264,7 +266,7 @@ async function executeCommand() {
 
   // Handle shortcut commands when logged in
   let commandToRun = raw;
-  const isShortcut = ['list', 'ls', 'add', 'delete', 'logout'].includes(firstTokenLower);
+  const isShortcut = ['list', 'ls', 'add', 'delete', 'priority', 'logout'].includes(firstTokenLower);
 
   if (isShortcut) {
     if (!session) {
@@ -364,6 +366,31 @@ async function hashPassword(password, hexSalt) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function fetchFrontendUserTasks(supabase, username) {
+  let { data: tasks, error } = await supabase
+    .from('tasks')
+    .select('id, task_name, position, created_at')
+    .eq('username', username)
+    .order('position', { ascending: true })
+    .order('id', { ascending: true });
+
+  if (error && error.message && error.message.toLowerCase().includes('position')) {
+    const fallback = await supabase
+      .from('tasks')
+      .select('id, task_name, created_at')
+      .eq('username', username)
+      .order('id', { ascending: true });
+    tasks = fallback.data;
+    error = fallback.error;
+  }
+
+  if (error) {
+    throw new Error(`Database error while fetching tasks: ${error.message}`);
+  }
+
+  return tasks || [];
+}
+
 async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   const tokens = commandToRun.split(/\s+/);
   if (tokens.length < 3) {
@@ -459,16 +486,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
 
       case 'list':
       case 'ls': {
-        const { data: tasks, error: listError } = await supabase
-          .from('tasks')
-          .select('id, task_name')
-          .eq('username', username)
-          .order('id', { ascending: true });
-
-        if (listError) {
-          appendHistory(displayCmd, `Database Error: ${listError.message}`, 'error', activePrompt);
-          return;
-        }
+        const tasks = await fetchFrontendUserTasks(supabase, username);
 
         if (!tasks || tasks.length === 0) {
           appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
@@ -496,9 +514,19 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const { error: addError } = await supabase
+        const existing = await fetchFrontendUserTasks(supabase, username);
+        const nextPos = existing.length + 1;
+
+        let { error: addError } = await supabase
           .from('tasks')
-          .insert([{ username, task_name: taskName }]);
+          .insert([{ username, task_name: taskName, position: nextPos }]);
+
+        if (addError && addError.message && addError.message.toLowerCase().includes('position')) {
+          const fallback = await supabase
+            .from('tasks')
+            .insert([{ username, task_name: taskName }]);
+          addError = fallback.error;
+        }
 
         if (addError) {
           appendHistory(displayCmd, `Database Error: ${addError.message}`, 'error', activePrompt);
@@ -531,16 +559,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const { data: tasks, error: fetchError } = await supabase
-          .from('tasks')
-          .select('id, task_name')
-          .eq('username', username)
-          .order('id', { ascending: true });
-
-        if (fetchError) {
-          appendHistory(displayCmd, `Database Error: ${fetchError.message}`, 'error', activePrompt);
-          return;
-        }
+        const tasks = await fetchFrontendUserTasks(supabase, username);
 
         if (!tasks || taskNumber > tasks.length) {
           appendHistory(displayCmd, `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
@@ -558,14 +577,89 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
+        // Re-sequence remaining tasks positions
+        const remaining = tasks.filter(t => t.id !== targetTask.id);
+        for (let i = 0; i < remaining.length; i++) {
+          await supabase
+            .from('tasks')
+            .update({ position: i + 1 })
+            .eq('id', remaining[i].id);
+        }
+
         appendHistory(displayCmd, `Task #${taskNumber} deleted: "${targetTask.task_name}"`, 'success', activePrompt);
+        break;
+      }
+
+      case 'priority': {
+        const remainderStr = remainderTokens.join(' ').trim();
+        if (!remainderStr) {
+          appendHistory(
+            displayCmd,
+            'Error: Missing arguments for priority. Usage: <username> <password> priority <from_number> to <to_number>\nExample: priority 3 to 1',
+            'error',
+            activePrompt
+          );
+          return;
+        }
+
+        const priorityPattern = /^(\d+)\s+to\s+(\d+)$/i;
+        const match = remainderStr.match(priorityPattern);
+
+        if (!match) {
+          appendHistory(
+            displayCmd,
+            'Error: Invalid priority format. Usage: <username> <password> priority <from_number> to <to_number>\nExample: priority 3 to 1',
+            'error',
+            activePrompt
+          );
+          return;
+        }
+
+        const fromNumber = parseInt(match[1], 10);
+        const toNumber = parseInt(match[2], 10);
+
+        if (fromNumber < 1 || toNumber < 1) {
+          appendHistory(displayCmd, 'Error: Task numbers must be positive integers.', 'error', activePrompt);
+          return;
+        }
+
+        const tasks = await fetchFrontendUserTasks(supabase, username);
+        if (!tasks || tasks.length === 0) {
+          appendHistory(displayCmd, `No tasks found for user '${username}'.`, 'error', activePrompt);
+          return;
+        }
+
+        if (fromNumber > tasks.length) {
+          appendHistory(displayCmd, `Error: Source task #${fromNumber} not found. Valid range is 1 to ${tasks.length}.`, 'error', activePrompt);
+          return;
+        }
+
+        if (toNumber > tasks.length) {
+          appendHistory(displayCmd, `Error: Target position #${toNumber} is out of bounds. Valid range is 1 to ${tasks.length}.`, 'error', activePrompt);
+          return;
+        }
+
+        // Move task from fromNumber to toNumber (1-based to 0-based)
+        const reordered = [...tasks];
+        const [movedTask] = reordered.splice(fromNumber - 1, 1);
+        reordered.splice(toNumber - 1, 0, movedTask);
+
+        // Update positions in database
+        for (let i = 0; i < reordered.length; i++) {
+          await supabase
+            .from('tasks')
+            .update({ position: i + 1 })
+            .eq('id', reordered[i].id);
+        }
+
+        appendHistory(displayCmd, `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`, 'success', activePrompt);
         break;
       }
 
       default:
         appendHistory(
           displayCmd,
-          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.`,
+          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.`,
           'error',
           activePrompt
         );

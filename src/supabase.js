@@ -141,6 +141,31 @@ export async function dbAuthenticateUser(username, password) {
   return { success: true, user };
 }
 
+async function fetchUserTasks(supabase, username) {
+  let { data: tasks, error } = await supabase
+    .from('tasks')
+    .select('id, task_name, position, created_at')
+    .eq('username', username)
+    .order('position', { ascending: true })
+    .order('id', { ascending: true });
+
+  if (error && error.message && error.message.toLowerCase().includes('position')) {
+    const fallback = await supabase
+      .from('tasks')
+      .select('id, task_name, created_at')
+      .eq('username', username)
+      .order('id', { ascending: true });
+    tasks = fallback.data;
+    error = fallback.error;
+  }
+
+  if (error) {
+    throw new Error(`Database error while fetching tasks: ${error.message}`);
+  }
+
+  return tasks || [];
+}
+
 export async function dbListTasks(username, password) {
   const auth = await dbAuthenticateUser(username, password);
   if (!auth.success) {
@@ -148,15 +173,7 @@ export async function dbListTasks(username, password) {
   }
 
   const supabase = getSupabase();
-  const { data: tasks, error } = await supabase
-    .from('tasks')
-    .select('id, task_name, created_at')
-    .eq('username', username)
-    .order('id', { ascending: true });
-
-  if (error) {
-    throw new Error(`Database error while fetching tasks: ${error.message}`);
-  }
+  const tasks = await fetchUserTasks(supabase, username);
 
   if (!tasks || tasks.length === 0) {
     return { success: true, message: `No tasks found for user '${username}'.`, tasks: [] };
@@ -173,9 +190,19 @@ export async function dbAddTask(username, password, taskName) {
   }
 
   const supabase = getSupabase();
-  const { error } = await supabase
+  const existing = await fetchUserTasks(supabase, username);
+  const nextPos = existing.length + 1;
+
+  let { error } = await supabase
     .from('tasks')
-    .insert([{ username, task_name: taskName }]);
+    .insert([{ username, task_name: taskName, position: nextPos }]);
+
+  if (error && error.message && error.message.toLowerCase().includes('position')) {
+    const fallback = await supabase
+      .from('tasks')
+      .insert([{ username, task_name: taskName }]);
+    error = fallback.error;
+  }
 
   if (error) {
     throw new Error(`Database error while adding task: ${error.message}`);
@@ -191,15 +218,7 @@ export async function dbDeleteTask(username, password, taskNumber) {
   }
 
   const supabase = getSupabase();
-  const { data: tasks, error: listError } = await supabase
-    .from('tasks')
-    .select('id, task_name')
-    .eq('username', username)
-    .order('id', { ascending: true });
-
-  if (listError) {
-    throw new Error(`Database error while fetching tasks: ${listError.message}`);
-  }
+  const tasks = await fetchUserTasks(supabase, username);
 
   if (!tasks || taskNumber < 1 || taskNumber > tasks.length) {
     return {
@@ -219,5 +238,64 @@ export async function dbDeleteTask(username, password, taskNumber) {
     throw new Error(`Database error while deleting task: ${deleteError.message}`);
   }
 
+  // Re-sequence remaining tasks positions
+  const remaining = tasks.filter(t => t.id !== targetTask.id);
+  for (let i = 0; i < remaining.length; i++) {
+    await supabase
+      .from('tasks')
+      .update({ position: i + 1 })
+      .eq('id', remaining[i].id);
+  }
+
   return { success: true, message: `Task #${taskNumber} deleted: "${targetTask.task_name}"` };
+}
+
+export async function dbPriorityTask(username, password, fromNumber, toNumber) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) {
+    return { success: false, message: auth.message };
+  }
+
+  const supabase = getSupabase();
+  const tasks = await fetchUserTasks(supabase, username);
+
+  if (tasks.length === 0) {
+    return { success: false, message: `No tasks found for user '${username}'.` };
+  }
+
+  if (fromNumber < 1 || fromNumber > tasks.length) {
+    return {
+      success: false,
+      message: `Error: Source task #${fromNumber} not found. Valid range is 1 to ${tasks.length}.`
+    };
+  }
+
+  if (toNumber < 1 || toNumber > tasks.length) {
+    return {
+      success: false,
+      message: `Error: Target position #${toNumber} is out of bounds. Valid range is 1 to ${tasks.length}.`
+    };
+  }
+
+  // Move task from fromNumber to toNumber (1-based to 0-based)
+  const reordered = [...tasks];
+  const [movedTask] = reordered.splice(fromNumber - 1, 1);
+  reordered.splice(toNumber - 1, 0, movedTask);
+
+  // Update positions in database
+  for (let i = 0; i < reordered.length; i++) {
+    const { error: updateErr } = await supabase
+      .from('tasks')
+      .update({ position: i + 1 })
+      .eq('id', reordered[i].id);
+
+    if (updateErr) {
+      throw new Error(`Database error while updating task priority: ${updateErr.message}`);
+    }
+  }
+
+  return {
+    success: true,
+    message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`
+  };
 }

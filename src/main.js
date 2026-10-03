@@ -17,7 +17,8 @@ import {
   dbAuthenticateUser,
   dbListTasks,
   dbAddTask,
-  dbDeleteTask
+  dbDeleteTask,
+  dbPriorityTask
 } from './supabase.js';
 
 const SESSION_STORAGE_KEY = 'todocli_session';
@@ -30,7 +31,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
 ]);
 
 /**
@@ -146,8 +147,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami', 'config supabase ']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'config supabase '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -165,11 +166,13 @@ function getHelpText() {
     '  <username> <password> list / ls                - List all tasks from Supabase',
     '  <username> <password> add task <task_name>     - Add task to Supabase',
     '  <username> <password> delete task <task_number>- Delete task from Supabase',
+    '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
     '  list / ls                                      - List your tasks',
     '  add task <task_name>                           - Add a new task',
     '  delete task <task_number>                      - Delete task by number',
+    '  priority <from> to <to>                        - Move task to new priority position',
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
     '',
@@ -231,7 +234,7 @@ async function executeCommand() {
 
   // Handle shortcut commands when logged in
   let commandToRun = raw;
-  const isShortcut = ['list', 'ls', 'add', 'delete', 'logout'].includes(firstTokenLower);
+  const isShortcut = ['list', 'ls', 'add', 'delete', 'priority', 'logout'].includes(firstTokenLower);
 
   if (isShortcut) {
     if (!session) {
@@ -422,10 +425,48 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
         break;
       }
 
+      case 'priority': {
+        const remainderStr = remainderTokens.join(' ').trim();
+        if (!remainderStr) {
+          appendHistory(
+            displayCmd,
+            'Error: Missing arguments for priority. Usage: <username> <password> priority <from_number> to <to_number>\nExample: priority 3 to 1',
+            'error',
+            activePrompt
+          );
+          return;
+        }
+
+        const priorityPattern = /^(\d+)\s+to\s+(\d+)$/i;
+        const match = remainderStr.match(priorityPattern);
+
+        if (!match) {
+          appendHistory(
+            displayCmd,
+            'Error: Invalid priority format. Usage: <username> <password> priority <from_number> to <to_number>\nExample: priority 3 to 1',
+            'error',
+            activePrompt
+          );
+          return;
+        }
+
+        const fromNumber = parseInt(match[1], 10);
+        const toNumber = parseInt(match[2], 10);
+
+        if (fromNumber < 1 || toNumber < 1) {
+          appendHistory(displayCmd, 'Error: Task numbers must be positive integers.', 'error', activePrompt);
+          return;
+        }
+
+        const result = await dbPriorityTask(username, password, fromNumber, toNumber);
+        appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
+        break;
+      }
+
       default:
         appendHistory(
           displayCmd,
-          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.`,
+          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.`,
           'error',
           activePrompt
         );

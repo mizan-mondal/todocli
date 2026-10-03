@@ -15,6 +15,7 @@ public class Task {
     private String taskName;
     private boolean completed = false;
     private LocalDateTime createdAt = LocalDateTime.now();
+    private Integer position = 0;
 
     public Task() {
     }
@@ -24,6 +25,15 @@ public class Task {
         this.taskName = taskName;
         this.completed = false;
         this.createdAt = LocalDateTime.now();
+        this.position = 0;
+    }
+
+    public Task(String username, String taskName, Integer position) {
+        this.username = username;
+        this.taskName = taskName;
+        this.completed = false;
+        this.createdAt = LocalDateTime.now();
+        this.position = position;
     }
 
     // Getters and Setters
@@ -65,5 +75,13 @@ public class Task {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Integer getPosition() {
+        return position;
+    }
+
+    public void setPosition(Integer position) {
+        this.position = position;
     }
 }

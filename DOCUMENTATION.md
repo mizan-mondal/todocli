@@ -400,14 +400,15 @@ UtilityCommand  ::= "help" | "clear" | "cls" | "whoami" | SupabaseConfig ;
 SupabaseConfig  ::= "config supabase" ( "status" | "clear" | ( <url> <anon_key> ) ) ;
 
 ExplicitCommand ::= <username> <password> Operation ;
-ShortcutCommand ::= ( "list" | "ls" | "add task " <task_name> | "delete task " <task_number> | "logout" ) ;
+ShortcutCommand ::= ( "list" | "ls" | "add task " <task_name> | "delete task " <task_number> | "priority " <from> "to" <to> | "logout" ) ;
 
 Operation       ::= "create"
                   | "login"
                   | "logout"
                   | ( "list" | "ls" )
                   | "add" "task" <task_name>
-                  | "delete" "task" <task_number> ;
+                  | "delete" "task" <task_number>
+                  | "priority" <from> "to" <to> ;
 ```
 
 ---
@@ -423,11 +424,13 @@ Operation       ::= "create"
 | `<user> <pass> ls` | Yes | **Exact alias for `list`** (Unix shortcut) | `mizan secret123 ls` |
 | `<user> <pass> add task <name>` | Yes | Inserts a new task associated with the authenticated user | `mizan secret123 add task Buy groceries` |
 | `<user> <pass> delete task <num>` | Yes | Resolves 1-based display serial number `<num>` to database task and deletes it | `mizan secret123 delete task 2` |
+| `<user> <pass> priority <from> to <to>` | Yes | Moves task at serial number `<from>` to position `<to>`, shifting tasks in between | `mizan secret123 priority 3 to 1` |
 | **Logged-In Shortcuts** | | *(Available when session active in browser)* | |
 | `list` | Automatic | Lists active user's tasks with 1-based serial numbers | `list` |
 | `ls` | Automatic | **Exact alias for `list`** | `ls` |
 | `add task <name>` | Automatic | Adds a task for the currently logged-in user | `add task Review PR` |
 | `delete task <num>` | Automatic | Deletes a task by serial number for logged-in user | `delete task 1` |
+| `priority <from> to <to>` | Automatic | Moves task to specified priority position for logged-in user | `priority 3 to 1` |
 | `whoami` | None | Displays current logged-in username or unauthenticated notice | `whoami` |
 | `logout` | Automatic | Clears current session from `localStorage` and resets prompt | `logout` |
 | **System Utilities** | | | |
@@ -705,9 +708,12 @@ switch (operation) {
     case "delete":
         // Validates sub-command 'task', maps serial number, deletes from taskRepository...
         // ...
+    case "priority":
+        // Validates '<from> to <to>', moves task, and re-sequences position stack...
+        // ...
     default:
         return ResponseEntity.ok(new CommandResponse(false,
-                "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.",
+                "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.",
                 null));
 }
 ```
@@ -820,6 +826,7 @@ The Java backend contains a comprehensive JUnit 5 integration test suite in [`Co
 | `testLoginAndLogoutCommands()` | Verifies session lifecycle, credential checks, and logout responses. |
 | `testFullWorkflowAccordingToSpec()` | End-to-end integration test: registration, empty list, multi-item creation, serial number output formatting, task deletion, re-indexing, and out-of-bounds error handling. |
 | `testListAndLsGiveSameResult()` | Specifically asserts that `list` and `ls` return identical success flags, text outputs, and task payloads across both empty and populated states. |
+| `testPriorityCommand()` | Tests priority repositioning (e.g. `3 to 1`, `1 to 3`, `2 to 1`), stack shifting verification, boundary checks, and syntax validation. |
 
 ---
 

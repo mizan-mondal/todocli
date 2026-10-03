@@ -100,11 +100,13 @@ public class CommandController {
                     "  <username> <password> list / ls                - List all tasks",
                     "  <username> <password> add task <task_name>     - Add a new task",
                     "  <username> <password> delete task <task_number>- Delete a task by number",
+                    "  <username> <password> priority <from> to <to>  - Reorder a task by moving it to a new position",
                     "",
                     "When Logged In (Shortcut Commands):",
                     "  list / ls                                      - List your tasks",
                     "  add task <task_name>                           - Add a new task",
                     "  delete task <task_number>                      - Delete a task by number",
+                    "  priority <from> to <to>                        - Move task to new priority position",
                     "  whoami                                         - Show current logged-in user",
                     "  logout                                         - Log out and clear session",
                     "",
@@ -168,7 +170,7 @@ public class CommandController {
 
             case "list":
             case "ls":
-                List<Task> tasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                List<Task> tasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 if (tasks.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(true,
                             "No tasks found for user '" + username + "'.", tasks));
@@ -205,9 +207,11 @@ public class CommandController {
                             "Error: Task description cannot be empty. Usage: <username> <password> add task <task_name>", null));
                 }
 
-                Task newTask = new Task(username, taskName);
+                List<Task> currentTasksBeforeAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                int nextPos = currentTasksBeforeAdd.size() + 1;
+                Task newTask = new Task(username, taskName, nextPos);
                 taskRepository.save(newTask);
-                List<Task> currentTasksAfterAdd = taskRepository.findByUsernameOrderByIdAsc(username);
+                List<Task> currentTasksAfterAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 return ResponseEntity.ok(new CommandResponse(true,
                         String.format("Task added: \"%s\"", taskName), currentTasksAfterAdd));
 
@@ -240,7 +244,7 @@ public class CommandController {
                             "Error: Invalid task number '" + taskNumStr + "'. Must be a positive integer.", null));
                 }
 
-                List<Task> userTasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                List<Task> userTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 if (taskNumber < 1 || taskNumber > userTasks.size()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             String.format("Error: Task #%d not found. Use '%s ******** list' to view current tasks.",
@@ -248,17 +252,84 @@ public class CommandController {
                 }
 
                 // Map 1-based display serial number to internal database task
-                Task targetTask = userTasks.get(taskNumber - 1);
+                Task targetTask = userTasks.remove(taskNumber - 1);
                 taskRepository.delete(targetTask);
 
-                List<Task> remainingTasks = taskRepository.findByUsernameOrderByIdAsc(username);
+                for (int i = 0; i < userTasks.size(); i++) {
+                    userTasks.get(i).setPosition(i + 1);
+                }
+                taskRepository.saveAll(userTasks);
+
+                List<Task> remainingTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 return ResponseEntity.ok(new CommandResponse(true,
                         String.format("Task #%d deleted: \"%s\"", taskNumber, targetTask.getTaskName()),
                         remainingTasks));
 
+            case "priority":
+                // Expect: priority <from_number> to <to_number>
+                if (opArgs.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing arguments for priority. Usage: <username> <password> priority <from_number> to <to_number>", null));
+                }
+
+                java.util.regex.Pattern priorityPattern = java.util.regex.Pattern.compile("^(\\d+)\\s+to\\s+(\\d+)$", java.util.regex.Pattern.CASE_INSENSITIVE);
+                java.util.regex.Matcher matcher = priorityPattern.matcher(opArgs);
+                if (!matcher.matches()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Invalid priority format. Usage: <username> <password> priority <from_number> to <to_number>", null));
+                }
+
+                int fromIndex;
+                int toIndex;
+                try {
+                    fromIndex = Integer.parseInt(matcher.group(1));
+                    toIndex = Integer.parseInt(matcher.group(2));
+                } catch (NumberFormatException e) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Task numbers must be valid integers.", null));
+                }
+
+                if (fromIndex < 1 || toIndex < 1) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Task numbers must be positive integers.", null));
+                }
+
+                List<Task> currentTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                if (currentTasks.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "No tasks found for user '" + username + "'.", null));
+                }
+
+                if (fromIndex > currentTasks.size()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            String.format("Error: Source task #%d not found. Valid range is 1 to %d.", fromIndex, currentTasks.size()),
+                            null));
+                }
+
+                if (toIndex > currentTasks.size()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            String.format("Error: Target position #%d is out of bounds. Valid range is 1 to %d.", toIndex, currentTasks.size()),
+                            null));
+                }
+
+                // Move task from fromIndex to toIndex (1-based to 0-based)
+                Task moved = currentTasks.remove(fromIndex - 1);
+                currentTasks.add(toIndex - 1, moved);
+
+                // Re-sequence 1-based positions for entire stack
+                for (int i = 0; i < currentTasks.size(); i++) {
+                    currentTasks.get(i).setPosition(i + 1);
+                }
+                taskRepository.saveAll(currentTasks);
+
+                List<Task> updatedTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                return ResponseEntity.ok(new CommandResponse(true,
+                        String.format("Task #%d moved to position #%d: \"%s\"", fromIndex, toIndex, moved.getTaskName()),
+                        updatedTasks));
+
             default:
                 return ResponseEntity.ok(new CommandResponse(false,
-                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task. Type 'help' for usage.",
+                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.",
                         null));
         }
     }

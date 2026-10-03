@@ -207,4 +207,56 @@ class CommandControllerTest {
         assertEquals("Buy groceries", lsResp.getTasks().get(0).getTaskName());
         assertEquals("Read book", lsResp.getTasks().get(1).getTaskName());
     }
+
+    @Test
+    void testPriorityCommand() {
+        sendCommand("mizan mypassword create");
+
+        // Add 3 tasks: 1, 2, 3
+        sendCommand("mizan mypassword add task Finish project");
+        sendCommand("mizan mypassword add task Buy groceries");
+        sendCommand("mizan mypassword add task Clean room");
+
+        // Initial list check
+        CommandResponse initialList = sendCommand("mizan mypassword list");
+        assertEquals("1. Finish project\n2. Buy groceries\n3. Clean room", initialList.getOutput());
+
+        // Move task 3 to position 1: priority 3 to 1
+        // Stack pushes downward: [3, 1, 2] -> Clean room, Finish project, Buy groceries
+        CommandResponse prioResp = sendCommand("mizan mypassword priority 3 to 1");
+        assertTrue(prioResp.isSuccess());
+        assertTrue(prioResp.getOutput().contains("Task #3 moved to position #1: \"Clean room\""));
+
+        CommandResponse reorderedList = sendCommand("mizan mypassword list");
+        assertEquals("1. Clean room\n2. Finish project\n3. Buy groceries", reorderedList.getOutput());
+
+        // Move task 1 to position 3: priority 1 to 3
+        // Stack shifts upward: [Finish project, Buy groceries, Clean room]
+        CommandResponse prioBack = sendCommand("mizan mypassword priority 1 to 3");
+        assertTrue(prioBack.isSuccess());
+        CommandResponse restoredList = sendCommand("mizan mypassword list");
+        assertEquals("1. Finish project\n2. Buy groceries\n3. Clean room", restoredList.getOutput());
+
+        // Move middle task to top: priority 2 to 1
+        // Result: Buy groceries, Finish project, Clean room
+        CommandResponse prioMid = sendCommand("mizan mypassword priority 2 to 1");
+        assertTrue(prioMid.isSuccess());
+        CommandResponse midList = sendCommand("mizan mypassword list");
+        assertEquals("1. Buy groceries\n2. Finish project\n3. Clean room", midList.getOutput());
+
+        // Edge case: invalid syntax
+        CommandResponse invalidSyntax = sendCommand("mizan mypassword priority 1 2");
+        assertFalse(invalidSyntax.isSuccess());
+        assertTrue(invalidSyntax.getOutput().contains("Invalid priority format"));
+
+        // Edge case: out of bounds from
+        CommandResponse oobFrom = sendCommand("mizan mypassword priority 4 to 1");
+        assertFalse(oobFrom.isSuccess());
+        assertTrue(oobFrom.getOutput().contains("Source task #4 not found"));
+
+        // Edge case: out of bounds to
+        CommandResponse oobTo = sendCommand("mizan mypassword priority 1 to 5");
+        assertFalse(oobTo.isSuccess());
+        assertTrue(oobTo.getOutput().contains("Target position #5 is out of bounds"));
+    }
 }
