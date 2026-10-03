@@ -142,6 +142,7 @@ export async function dbAuthenticateUser(username, password) {
 }
 
 async function fetchUserTasks(supabase, username) {
+  let hasPosition = true;
   let { data: tasks, error } = await supabase
     .from('tasks')
     .select('id, task_name, position, created_at')
@@ -150,6 +151,7 @@ async function fetchUserTasks(supabase, username) {
     .order('id', { ascending: true });
 
   if (error && error.message && error.message.toLowerCase().includes('position')) {
+    hasPosition = false;
     const fallback = await supabase
       .from('tasks')
       .select('id, task_name, created_at')
@@ -163,7 +165,7 @@ async function fetchUserTasks(supabase, username) {
     throw new Error(`Database error while fetching tasks: ${error.message}`);
   }
 
-  return tasks || [];
+  return { tasks: tasks || [], hasPosition };
 }
 
 export async function dbListTasks(username, password) {
@@ -173,7 +175,7 @@ export async function dbListTasks(username, password) {
   }
 
   const supabase = getSupabase();
-  const tasks = await fetchUserTasks(supabase, username);
+  const { tasks } = await fetchUserTasks(supabase, username);
 
   if (!tasks || tasks.length === 0) {
     return { success: true, message: `No tasks found for user '${username}'.`, tasks: [] };
@@ -190,12 +192,21 @@ export async function dbAddTask(username, password, taskName) {
   }
 
   const supabase = getSupabase();
-  const existing = await fetchUserTasks(supabase, username);
-  const nextPos = existing.length + 1;
+  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
+  const nextPos = tasks.length + 1;
 
-  let { error } = await supabase
-    .from('tasks')
-    .insert([{ username, task_name: taskName, position: nextPos }]);
+  let error = null;
+  if (hasPosition) {
+    const res = await supabase
+      .from('tasks')
+      .insert([{ username, task_name: taskName, position: nextPos }]);
+    error = res.error;
+  } else {
+    const res = await supabase
+      .from('tasks')
+      .insert([{ username, task_name: taskName }]);
+    error = res.error;
+  }
 
   if (error && error.message && error.message.toLowerCase().includes('position')) {
     const fallback = await supabase
@@ -218,7 +229,7 @@ export async function dbDeleteTask(username, password, taskNumber) {
   }
 
   const supabase = getSupabase();
-  const tasks = await fetchUserTasks(supabase, username);
+  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
 
   if (!tasks || taskNumber < 1 || taskNumber > tasks.length) {
     return {
@@ -238,13 +249,15 @@ export async function dbDeleteTask(username, password, taskNumber) {
     throw new Error(`Database error while deleting task: ${deleteError.message}`);
   }
 
-  // Re-sequence remaining tasks positions
-  const remaining = tasks.filter(t => t.id !== targetTask.id);
-  for (let i = 0; i < remaining.length; i++) {
-    await supabase
-      .from('tasks')
-      .update({ position: i + 1 })
-      .eq('id', remaining[i].id);
+  // Re-sequence remaining tasks positions only if position column exists
+  if (hasPosition) {
+    const remaining = tasks.filter(t => t.id !== targetTask.id);
+    for (let i = 0; i < remaining.length; i++) {
+      await supabase
+        .from('tasks')
+        .update({ position: i + 1 })
+        .eq('id', remaining[i].id);
+    }
   }
 
   return { success: true, message: `Task #${taskNumber} deleted: "${targetTask.task_name}"` };
@@ -257,7 +270,7 @@ export async function dbPriorityTask(username, password, fromNumber, toNumber) {
   }
 
   const supabase = getSupabase();
-  const tasks = await fetchUserTasks(supabase, username);
+  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
 
   if (tasks.length === 0) {
     return { success: false, message: `No tasks found for user '${username}'.` };
@@ -282,15 +295,45 @@ export async function dbPriorityTask(username, password, fromNumber, toNumber) {
   const [movedTask] = reordered.splice(fromNumber - 1, 1);
   reordered.splice(toNumber - 1, 0, movedTask);
 
-  // Update positions in database
-  for (let i = 0; i < reordered.length; i++) {
-    const { error: updateErr } = await supabase
-      .from('tasks')
-      .update({ position: i + 1 })
-      .eq('id', reordered[i].id);
+  if (hasPosition) {
+    // Attempt updating 'position' column
+    let positionUpdateSucceeded = true;
+    for (let i = 0; i < reordered.length; i++) {
+      const { error: updateErr } = await supabase
+        .from('tasks')
+        .update({ position: i + 1 })
+        .eq('id', reordered[i].id);
 
-    if (updateErr) {
-      throw new Error(`Database error while updating task priority: ${updateErr.message}`);
+      if (updateErr) {
+        if (updateErr.message && updateErr.message.toLowerCase().includes('position')) {
+          positionUpdateSucceeded = false;
+          break;
+        }
+        throw new Error(`Database error while updating task priority: ${updateErr.message}`);
+      }
+    }
+
+    if (positionUpdateSucceeded) {
+      return {
+        success: true,
+        message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`
+      };
+    }
+  }
+
+  // Fallback for tables without 'position' column:
+  // Re-assign task_name in sorted id slots so order('id', { ascending: true }) matches reordered priority
+  const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
+  for (let i = 0; i < sortedSlotIds.length; i++) {
+    const slotId = sortedSlotIds[i];
+    const newTaskName = reordered[i].task_name;
+    const { error: slotErr } = await supabase
+      .from('tasks')
+      .update({ task_name: newTaskName })
+      .eq('id', slotId);
+
+    if (slotErr) {
+      throw new Error(`Database error while reordering tasks: ${slotErr.message}`);
     }
   }
 

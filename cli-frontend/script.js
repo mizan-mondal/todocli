@@ -367,6 +367,7 @@ async function hashPassword(password, hexSalt) {
 }
 
 async function fetchFrontendUserTasks(supabase, username) {
+  let hasPosition = true;
   let { data: tasks, error } = await supabase
     .from('tasks')
     .select('id, task_name, position, created_at')
@@ -375,6 +376,7 @@ async function fetchFrontendUserTasks(supabase, username) {
     .order('id', { ascending: true });
 
   if (error && error.message && error.message.toLowerCase().includes('position')) {
+    hasPosition = false;
     const fallback = await supabase
       .from('tasks')
       .select('id, task_name, created_at')
@@ -388,7 +390,7 @@ async function fetchFrontendUserTasks(supabase, username) {
     throw new Error(`Database error while fetching tasks: ${error.message}`);
   }
 
-  return tasks || [];
+  return { tasks: tasks || [], hasPosition };
 }
 
 async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
@@ -486,7 +488,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
 
       case 'list':
       case 'ls': {
-        const tasks = await fetchFrontendUserTasks(supabase, username);
+        const { tasks } = await fetchFrontendUserTasks(supabase, username);
 
         if (!tasks || tasks.length === 0) {
           appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
@@ -514,12 +516,21 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const existing = await fetchFrontendUserTasks(supabase, username);
-        const nextPos = existing.length + 1;
+        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
+        const nextPos = tasks.length + 1;
 
-        let { error: addError } = await supabase
-          .from('tasks')
-          .insert([{ username, task_name: taskName, position: nextPos }]);
+        let addError = null;
+        if (hasPosition) {
+          const res = await supabase
+            .from('tasks')
+            .insert([{ username, task_name: taskName, position: nextPos }]);
+          addError = res.error;
+        } else {
+          const res = await supabase
+            .from('tasks')
+            .insert([{ username, task_name: taskName }]);
+          addError = res.error;
+        }
 
         if (addError && addError.message && addError.message.toLowerCase().includes('position')) {
           const fallback = await supabase
@@ -559,7 +570,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const tasks = await fetchFrontendUserTasks(supabase, username);
+        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
 
         if (!tasks || taskNumber > tasks.length) {
           appendHistory(displayCmd, `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
@@ -577,13 +588,15 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        // Re-sequence remaining tasks positions
-        const remaining = tasks.filter(t => t.id !== targetTask.id);
-        for (let i = 0; i < remaining.length; i++) {
-          await supabase
-            .from('tasks')
-            .update({ position: i + 1 })
-            .eq('id', remaining[i].id);
+        // Re-sequence remaining tasks positions only if position column exists
+        if (hasPosition) {
+          const remaining = tasks.filter(t => t.id !== targetTask.id);
+          for (let i = 0; i < remaining.length; i++) {
+            await supabase
+              .from('tasks')
+              .update({ position: i + 1 })
+              .eq('id', remaining[i].id);
+          }
         }
 
         appendHistory(displayCmd, `Task #${taskNumber} deleted: "${targetTask.task_name}"`, 'success', activePrompt);
@@ -623,7 +636,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const tasks = await fetchFrontendUserTasks(supabase, username);
+        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
         if (!tasks || tasks.length === 0) {
           appendHistory(displayCmd, `No tasks found for user '${username}'.`, 'error', activePrompt);
           return;
@@ -644,12 +657,43 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
         const [movedTask] = reordered.splice(fromNumber - 1, 1);
         reordered.splice(toNumber - 1, 0, movedTask);
 
-        // Update positions in database
-        for (let i = 0; i < reordered.length; i++) {
-          await supabase
+        if (hasPosition) {
+          let positionUpdateSucceeded = true;
+          for (let i = 0; i < reordered.length; i++) {
+            const { error: updateErr } = await supabase
+              .from('tasks')
+              .update({ position: i + 1 })
+              .eq('id', reordered[i].id);
+
+            if (updateErr) {
+              if (updateErr.message && updateErr.message.toLowerCase().includes('position')) {
+                positionUpdateSucceeded = false;
+                break;
+              }
+              throw new Error(`Database error while updating task priority: ${updateErr.message}`);
+            }
+          }
+
+          if (positionUpdateSucceeded) {
+            appendHistory(displayCmd, `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`, 'success', activePrompt);
+            break;
+          }
+        }
+
+        // Fallback for tables without 'position' column:
+        // Re-assign task_name in sorted id slots so order('id', { ascending: true }) matches reordered priority
+        const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
+        for (let i = 0; i < sortedSlotIds.length; i++) {
+          const slotId = sortedSlotIds[i];
+          const newTaskName = reordered[i].task_name;
+          const { error: slotErr } = await supabase
             .from('tasks')
-            .update({ position: i + 1 })
-            .eq('id', reordered[i].id);
+            .update({ task_name: newTaskName })
+            .eq('id', slotId);
+
+          if (slotErr) {
+            throw new Error(`Database error while reordering tasks: ${slotErr.message}`);
+          }
         }
 
         appendHistory(displayCmd, `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`, 'success', activePrompt);
