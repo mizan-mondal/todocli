@@ -75,12 +75,12 @@ You can configure credentials in either of two ways:
 | `<username> <password> logout` | Log out and clear browser session | `mizan mypassword logout` |
 | `<username> <password> list` / `ls` | List all tasks from Supabase with serial numbers | `mizan mypassword list` |
 | `<username> <password> add task <task_name>` | Add a new task to Supabase | `mizan mypassword add task Buy groceries` |
-| `<username> <password> delete task <task_number>` | Delete a task from Supabase using serial number | `mizan mypassword delete task 4` |
+| `<username> <password> delete task <task_numbers>` | Delete one or more tasks from Supabase using serial numbers | `mizan mypassword delete task 1,2,5` |
 | `<username> <password> priority <from> to <to>` | Reorder a task by moving it to a new priority position | `mizan mypassword priority 3 to 1` |
 | **When Logged In (Shortcut Commands)** | | |
 | `list` / `ls` | List tasks for the currently logged-in user | `ls` |
 | `add task <task_name>` | Add a task for the currently logged-in user | `add task Buy coffee` |
-| `delete task <task_number>` | Delete a task using 1-based serial number | `delete task 2` |
+| `delete task <task_numbers>` | Delete one or more tasks using 1-based serial numbers | `delete task 1,2,5` |
 | `priority <from> to <to>` | Move task to a new priority position | `priority 3 to 1` |
 | `whoami` | Display active logged-in user | `whoami` |
 | `logout` | Log out the active session | `logout` |

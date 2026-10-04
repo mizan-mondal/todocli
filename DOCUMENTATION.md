@@ -423,13 +423,13 @@ Operation       ::= "create"
 | `<user> <pass> list` | Yes | Retrieves all tasks owned by user, sorted by ID ascending | `mizan secret123 list` |
 | `<user> <pass> ls` | Yes | **Exact alias for `list`** (Unix shortcut) | `mizan secret123 ls` |
 | `<user> <pass> add task <name>` | Yes | Inserts a new task associated with the authenticated user | `mizan secret123 add task Buy groceries` |
-| `<user> <pass> delete task <num>` | Yes | Resolves 1-based display serial number `<num>` to database task and deletes it | `mizan secret123 delete task 2` |
+| `<user> <pass> delete task <numbers>` | Yes | Resolves 1-based display serial numbers `<numbers>` (e.g. `2` or `1,2,5`) to database tasks and deletes them | `mizan secret123 delete task 1,2,5` |
 | `<user> <pass> priority <from> to <to>` | Yes | Moves task at serial number `<from>` to position `<to>`, shifting tasks in between | `mizan secret123 priority 3 to 1` |
 | **Logged-In Shortcuts** | | *(Available when session active in browser)* | |
 | `list` | Automatic | Lists active user's tasks with 1-based serial numbers | `list` |
 | `ls` | Automatic | **Exact alias for `list`** | `ls` |
 | `add task <name>` | Automatic | Adds a task for the currently logged-in user | `add task Review PR` |
-| `delete task <num>` | Automatic | Deletes a task by serial number for logged-in user | `delete task 1` |
+| `delete task <numbers>` | Automatic | Deletes tasks by serial number (e.g. `1` or `1,2,5`) for logged-in user | `delete task 1,2,5` |
 | `priority <from> to <to>` | Automatic | Moves task to specified priority position for logged-in user | `priority 3 to 1` |
 | `whoami` | None | Displays current logged-in username or unauthenticated notice | `whoami` |
 | `logout` | Automatic | Clears current session from `localStorage` and resets prompt | `logout` |

@@ -180,6 +180,58 @@ class CommandControllerTest {
     }
 
     @Test
+    void testDeleteMultipleTasks() {
+        sendCommand("mizan mypassword create");
+
+        sendCommand("mizan mypassword add task Task One");
+        sendCommand("mizan mypassword add task Task Two");
+        sendCommand("mizan mypassword add task Task Three");
+        sendCommand("mizan mypassword add task Task Four");
+        sendCommand("mizan mypassword add task Task Five");
+
+        // Verify initial 5 tasks
+        CommandResponse initialList = sendCommand("mizan mypassword list");
+        assertEquals("1. Task One\n2. Task Two\n3. Task Three\n4. Task Four\n5. Task Five", initialList.getOutput());
+
+        // Delete tasks 1,2,5 at once (as requested: username password delete task 1,2,5)
+        CommandResponse delResp = sendCommand("mizan mypassword delete task 1,2,5");
+        assertTrue(delResp.isSuccess());
+        assertTrue(delResp.getOutput().contains("Task #1 deleted: \"Task One\""));
+        assertTrue(delResp.getOutput().contains("Task #2 deleted: \"Task Two\""));
+        assertTrue(delResp.getOutput().contains("Task #5 deleted: \"Task Five\""));
+
+        // Verify remaining tasks (Task Three and Task Four) re-indexed to 1 and 2
+        CommandResponse listAfterDel = sendCommand("mizan mypassword list");
+        assertTrue(listAfterDel.isSuccess());
+        assertEquals("1. Task Three\n2. Task Four", listAfterDel.getOutput());
+
+        // Test with spaces: "delete task 1, 2"
+        CommandResponse delWithSpaces = sendCommand("mizan mypassword delete task 1, 2");
+        assertTrue(delWithSpaces.isSuccess());
+        assertTrue(delWithSpaces.getOutput().contains("Task #1 deleted: \"Task Three\""));
+        assertTrue(delWithSpaces.getOutput().contains("Task #2 deleted: \"Task Four\""));
+
+        // All tasks now deleted
+        CommandResponse emptyList = sendCommand("mizan mypassword list");
+        assertEquals("No tasks found for user 'mizan'.", emptyList.getOutput());
+
+        // Test out of bounds error
+        sendCommand("mizan mypassword add task New Task");
+        CommandResponse outOfBounds = sendCommand("mizan mypassword delete task 1,5");
+        assertFalse(outOfBounds.isSuccess());
+        assertTrue(outOfBounds.getOutput().contains("Task #5 not found"));
+
+        // Verify "New Task" was not deleted due to atomic failure
+        CommandResponse afterFailed = sendCommand("mizan mypassword list");
+        assertEquals("1. New Task", afterFailed.getOutput());
+
+        // Test invalid format error
+        CommandResponse invalidNum = sendCommand("mizan mypassword delete task 1,abc");
+        assertFalse(invalidNum.isSuccess());
+        assertTrue(invalidNum.getOutput().contains("Invalid task number 'abc'"));
+    }
+
+    @Test
     void testListAndLsGiveSameResult() {
         sendCommand("mizan mypassword create");
 

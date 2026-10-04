@@ -222,7 +222,7 @@ export async function dbAddTask(username, password, taskName) {
   return { success: true, message: `Task added: "${taskName}"` };
 }
 
-export async function dbDeleteTask(username, password, taskNumber) {
+export async function dbDeleteTask(username, password, taskNumberInput) {
   const auth = await dbAuthenticateUser(username, password);
   if (!auth.success) {
     return { success: false, message: auth.message };
@@ -231,19 +231,57 @@ export async function dbDeleteTask(username, password, taskNumber) {
   const supabase = getSupabase();
   const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
 
-  if (!tasks || taskNumber < 1 || taskNumber > tasks.length) {
+  if (!tasks || tasks.length === 0) {
     return {
       success: false,
-      message: `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`
+      message: `Error: Task not found. No tasks exist for user '${username}'.`
     };
   }
 
-  const targetTask = tasks[taskNumber - 1];
+  let rawNumbers = [];
+  if (Array.isArray(taskNumberInput)) {
+    rawNumbers = taskNumberInput;
+  } else if (typeof taskNumberInput === 'number') {
+    rawNumbers = [taskNumberInput];
+  } else if (typeof taskNumberInput === 'string') {
+    const parts = taskNumberInput.trim().split(/[,\s]+/);
+    for (const p of parts) {
+      if (!p) continue;
+      const parsed = parseInt(p, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        return {
+          success: false,
+          message: `Error: Invalid task number '${p}'. Must be a positive integer.`
+        };
+      }
+      rawNumbers.push(parsed);
+    }
+  }
+
+  if (rawNumbers.length === 0) {
+    return {
+      success: false,
+      message: 'Error: Missing task number. Usage: delete task <task_number>'
+    };
+  }
+
+  for (const num of rawNumbers) {
+    if (num < 1 || num > tasks.length) {
+      return {
+        success: false,
+        message: `Error: Task #${num} not found. Use 'list' to view current tasks.`
+      };
+    }
+  }
+
+  const uniqueNumbers = Array.from(new Set(rawNumbers)).sort((a, b) => a - b);
+  const targetTasks = uniqueNumbers.map(num => ({ number: num, task: tasks[num - 1] }));
+  const targetIds = targetTasks.map(t => t.task.id);
 
   const { error: deleteError } = await supabase
     .from('tasks')
     .delete()
-    .eq('id', targetTask.id);
+    .in('id', targetIds);
 
   if (deleteError) {
     throw new Error(`Database error while deleting task: ${deleteError.message}`);
@@ -251,7 +289,8 @@ export async function dbDeleteTask(username, password, taskNumber) {
 
   // Re-sequence remaining tasks positions only if position column exists
   if (hasPosition) {
-    const remaining = tasks.filter(t => t.id !== targetTask.id);
+    const targetIdSet = new Set(targetIds);
+    const remaining = tasks.filter(t => !targetIdSet.has(t.id));
     for (let i = 0; i < remaining.length; i++) {
       await supabase
         .from('tasks')
@@ -260,7 +299,12 @@ export async function dbDeleteTask(username, password, taskNumber) {
     }
   }
 
-  return { success: true, message: `Task #${taskNumber} deleted: "${targetTask.task_name}"` };
+  if (targetTasks.length === 1) {
+    return { success: true, message: `Task #${targetTasks[0].number} deleted: "${targetTasks[0].task.task_name}"` };
+  }
+
+  const msg = targetTasks.map(t => `Task #${t.number} deleted: "${t.task.task_name}"`).join('\n');
+  return { success: true, message: msg };
 }
 
 export async function dbPriorityTask(username, password, fromNumber, toNumber) {

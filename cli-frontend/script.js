@@ -197,13 +197,13 @@ function getHelpText() {
     '  <username> <password> logout                   - Log out & clear browser session',
     '  <username> <password> list / ls                - List all tasks from Supabase',
     '  <username> <password> add task <task_name>     - Add task to Supabase',
-    '  <username> <password> delete task <task_number>- Delete task from Supabase',
+    '  <username> <password> delete task <task_numbers>- Delete tasks from Supabase (e.g. 1 or 1,2,5)',
     '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
     '  list / ls                                      - List your tasks',
     '  add task <task_name>                           - Add a new task',
-    '  delete task <task_number>                      - Delete task by number',
+    '  delete task <task_numbers>                     - Delete tasks by number (e.g. 1 or 1,2,5)',
     '  priority <from> to <to>                        - Move task to new priority position',
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
@@ -558,30 +558,63 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: delete task <task_number>`, 'error', activePrompt);
           return;
         }
-        const taskNumStr = remainderTokens[1];
+        const taskNumStr = remainderTokens.slice(1).join(' ').trim();
         if (!taskNumStr) {
           appendHistory(displayCmd, 'Error: Missing task number. Usage: delete task <task_number>', 'error', activePrompt);
           return;
         }
 
-        const taskNumber = parseInt(taskNumStr, 10);
-        if (isNaN(taskNumber) || taskNumber < 1) {
-          appendHistory(displayCmd, `Error: Invalid task number '${taskNumStr}'. Must be a positive integer.`, 'error', activePrompt);
+        const parts = taskNumStr.split(/[,\s]+/);
+        const rawNumbers = [];
+        let parseError = null;
+        for (const p of parts) {
+          if (!p) continue;
+          const parsed = parseInt(p, 10);
+          if (isNaN(parsed) || parsed < 1) {
+            parseError = `Error: Invalid task number '${p}'. Must be a positive integer.`;
+            break;
+          }
+          rawNumbers.push(parsed);
+        }
+
+        if (parseError) {
+          appendHistory(displayCmd, parseError, 'error', activePrompt);
+          return;
+        }
+
+        if (rawNumbers.length === 0) {
+          appendHistory(displayCmd, 'Error: Missing task number. Usage: delete task <task_number>', 'error', activePrompt);
           return;
         }
 
         const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
 
-        if (!tasks || taskNumber > tasks.length) {
-          appendHistory(displayCmd, `Error: Task #${taskNumber} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
+        if (!tasks || tasks.length === 0) {
+          appendHistory(displayCmd, `Error: Task not found. No tasks exist for user '${username}'.`, 'error', activePrompt);
           return;
         }
 
-        const targetTask = tasks[taskNumber - 1];
+        let notFoundNum = null;
+        for (const num of rawNumbers) {
+          if (num < 1 || num > tasks.length) {
+            notFoundNum = num;
+            break;
+          }
+        }
+
+        if (notFoundNum !== null) {
+          appendHistory(displayCmd, `Error: Task #${notFoundNum} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
+          return;
+        }
+
+        const uniqueNumbers = Array.from(new Set(rawNumbers)).sort((a, b) => a - b);
+        const targetTasks = uniqueNumbers.map(num => ({ number: num, task: tasks[num - 1] }));
+        const targetIds = targetTasks.map(t => t.task.id);
+
         const { error: delError } = await supabase
           .from('tasks')
           .delete()
-          .eq('id', targetTask.id);
+          .in('id', targetIds);
 
         if (delError) {
           appendHistory(displayCmd, `Database Error: ${delError.message}`, 'error', activePrompt);
@@ -590,7 +623,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
 
         // Re-sequence remaining tasks positions only if position column exists
         if (hasPosition) {
-          const remaining = tasks.filter(t => t.id !== targetTask.id);
+          const targetIdSet = new Set(targetIds);
+          const remaining = tasks.filter(t => !targetIdSet.has(t.id));
           for (let i = 0; i < remaining.length; i++) {
             await supabase
               .from('tasks')
@@ -599,7 +633,12 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           }
         }
 
-        appendHistory(displayCmd, `Task #${taskNumber} deleted: "${targetTask.task_name}"`, 'success', activePrompt);
+        if (targetTasks.length === 1) {
+          appendHistory(displayCmd, `Task #${targetTasks[0].number} deleted: "${targetTasks[0].task.task_name}"`, 'success', activePrompt);
+        } else {
+          const msg = targetTasks.map(t => `Task #${t.number} deleted: "${t.task.task_name}"`).join('\n');
+          appendHistory(displayCmd, msg, 'success', activePrompt);
+        }
         break;
       }
 

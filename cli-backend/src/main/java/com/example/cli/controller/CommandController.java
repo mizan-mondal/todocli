@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api")
@@ -99,13 +100,13 @@ public class CommandController {
                     "  <username> <password> logout                   - Log out and clear session",
                     "  <username> <password> list / ls                - List all tasks",
                     "  <username> <password> add task <task_name>     - Add a new task",
-                    "  <username> <password> delete task <task_number>- Delete a task by number",
+                    "  <username> <password> delete task <task_numbers>- Delete tasks by number (e.g. 1 or 1,2,5)",
                     "  <username> <password> priority <from> to <to>  - Reorder a task by moving it to a new position",
                     "",
                     "When Logged In (Shortcut Commands):",
                     "  list / ls                                      - List your tasks",
                     "  add task <task_name>                           - Add a new task",
-                    "  delete task <task_number>                      - Delete a task by number",
+                    "  delete task <task_numbers>                     - Delete tasks by number (e.g. 1 or 1,2,5)",
                     "  priority <from> to <to>                        - Move task to new priority position",
                     "  whoami                                         - Show current logged-in user",
                     "  logout                                         - Log out and clear session",
@@ -216,7 +217,7 @@ public class CommandController {
                         String.format("Task added: \"%s\"", taskName), currentTasksAfterAdd));
 
             case "delete":
-                // Expect: delete task <task_number>
+                // Expect: delete task <task_number> or delete task <task_number,task_number,...>
                 if (opArgs.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             "Error: Missing sub-command. Usage: <username> <password> delete task <task_number>", null));
@@ -236,34 +237,65 @@ public class CommandController {
                             "Error: Missing task number. Usage: <username> <password> delete task <task_number>", null));
                 }
 
-                int taskNumber;
-                try {
-                    taskNumber = Integer.parseInt(taskNumStr);
-                } catch (NumberFormatException e) {
+                String[] rawTokens = taskNumStr.split("[,\\s]+");
+                List<Integer> taskNumbers = new ArrayList<>();
+                for (String token : rawTokens) {
+                    if (token.isEmpty()) continue;
+                    try {
+                        int num = Integer.parseInt(token);
+                        if (num < 1) {
+                            return ResponseEntity.ok(new CommandResponse(false,
+                                    "Error: Invalid task number '" + token + "'. Must be a positive integer.", null));
+                        }
+                        if (!taskNumbers.contains(num)) {
+                            taskNumbers.add(num);
+                        }
+                    } catch (NumberFormatException e) {
+                        return ResponseEntity.ok(new CommandResponse(false,
+                                "Error: Invalid task number '" + token + "'. Must be a positive integer.", null));
+                    }
+                }
+
+                if (taskNumbers.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(false,
-                            "Error: Invalid task number '" + taskNumStr + "'. Must be a positive integer.", null));
+                            "Error: Missing task number. Usage: <username> <password> delete task <task_number>", null));
                 }
 
                 List<Task> userTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
-                if (taskNumber < 1 || taskNumber > userTasks.size()) {
-                    return ResponseEntity.ok(new CommandResponse(false,
-                            String.format("Error: Task #%d not found. Use '%s ******** list' to view current tasks.",
-                                     taskNumber, username), null));
+                for (int num : taskNumbers) {
+                    if (num < 1 || num > userTasks.size()) {
+                        return ResponseEntity.ok(new CommandResponse(false,
+                                String.format("Error: Task #%d not found. Use '%s ******** list' to view current tasks.",
+                                         num, username), null));
+                    }
                 }
 
-                // Map 1-based display serial number to internal database task
-                Task targetTask = userTasks.remove(taskNumber - 1);
-                taskRepository.delete(targetTask);
+                Collections.sort(taskNumbers);
 
-                for (int i = 0; i < userTasks.size(); i++) {
-                    userTasks.get(i).setPosition(i + 1);
+                List<Task> tasksToDelete = new ArrayList<>();
+                List<String> deletedMessages = new ArrayList<>();
+                for (int num : taskNumbers) {
+                    Task target = userTasks.get(num - 1);
+                    tasksToDelete.add(target);
+                    deletedMessages.add(String.format("Task #%d deleted: \"%s\"", num, target.getTaskName()));
                 }
-                taskRepository.saveAll(userTasks);
 
-                List<Task> remainingTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                taskRepository.deleteAll(tasksToDelete);
+
+                Set<Long> deletedIds = tasksToDelete.stream().map(Task::getId).collect(Collectors.toSet());
+                List<Task> remainingTasks = userTasks.stream()
+                        .filter(t -> !deletedIds.contains(t.getId()))
+                        .collect(Collectors.toList());
+
+                for (int i = 0; i < remainingTasks.size(); i++) {
+                    remainingTasks.get(i).setPosition(i + 1);
+                }
+                taskRepository.saveAll(remainingTasks);
+
+                List<Task> finalRemainingTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 return ResponseEntity.ok(new CommandResponse(true,
-                        String.format("Task #%d deleted: \"%s\"", taskNumber, targetTask.getTaskName()),
-                        remainingTasks));
+                        String.join("\n", deletedMessages),
+                        finalRemainingTasks));
 
             case "priority":
                 // Expect: priority <from_number> to <to_number>

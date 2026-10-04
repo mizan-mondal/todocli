@@ -165,13 +165,13 @@ function getHelpText() {
     '  <username> <password> logout                   - Log out & clear browser session',
     '  <username> <password> list / ls                - List all tasks from Supabase',
     '  <username> <password> add task <task_name>     - Add task to Supabase',
-    '  <username> <password> delete task <task_number>- Delete task from Supabase',
+    '  <username> <password> delete task <task_numbers>- Delete tasks from Supabase (e.g. 1 or 1,2,5)',
     '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
     '  list / ls                                      - List your tasks',
     '  add task <task_name>                           - Add a new task',
-    '  delete task <task_number>                      - Delete task by number',
+    '  delete task <task_numbers>                     - Delete tasks by number (e.g. 1 or 1,2,5)',
     '  priority <from> to <to>                        - Move task to new priority position',
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
@@ -408,19 +408,13 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: delete task <task_number>`, 'error', activePrompt);
           return;
         }
-        const taskNumStr = remainderTokens[1];
+        const taskNumStr = remainderTokens.slice(1).join(' ').trim();
         if (!taskNumStr) {
           appendHistory(displayCmd, 'Error: Missing task number. Usage: delete task <task_number>', 'error', activePrompt);
           return;
         }
 
-        const taskNumber = parseInt(taskNumStr, 10);
-        if (isNaN(taskNumber) || taskNumber < 1) {
-          appendHistory(displayCmd, `Error: Invalid task number '${taskNumStr}'. Must be a positive integer.`, 'error', activePrompt);
-          return;
-        }
-
-        const result = await dbDeleteTask(username, password, taskNumber);
+        const result = await dbDeleteTask(username, password, taskNumStr);
         appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
         break;
       }
