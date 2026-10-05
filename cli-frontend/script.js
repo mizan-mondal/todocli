@@ -496,35 +496,26 @@ async function dbCreateUser(username, password) {
   const salt = generateHexSalt();
   const hash = await hashPassword(password, salt);
 
-  try {
-    const { data, error } = await supabase.rpc('todocli_create_user', {
-      p_username: cleanUser,
-      p_password_hash: hash,
-      p_password_salt: salt
-    });
-    if (!error && data) {
-      if (data.success) saltCache.set(cleanUser, salt);
-      return data;
+  const { data, error } = await supabase.rpc('todocli_create_user', {
+    p_username: cleanUser,
+    p_password_hash: hash,
+    p_password_salt: salt
+  });
+
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor to enable secure procedures and Row Level Security.'
+      };
     }
-  } catch (e) {}
+    return { success: false, message: `Database error while creating user: ${error.message}` };
+  }
 
-  // Legacy fallback
-  const { data: existing, error: checkError } = await supabase
-    .from('users')
-    .select('username')
-    .eq('username', cleanUser)
-    .maybeSingle();
-
-  if (checkError) throw new Error(`Database error while checking user: ${checkError.message}`);
-  if (existing) return { success: false, message: `Error: User '${cleanUser}' already exists.` };
-
-  const { error: insertError } = await supabase
-    .from('users')
-    .insert([{ username: cleanUser, password_hash: hash, password_salt: salt }]);
-
-  if (insertError) throw new Error(`Database error while creating user: ${insertError.message}`);
-  saltCache.set(cleanUser, salt);
-  return { success: true, message: `User '${cleanUser}' created successfully.` };
+  if (data && data.success) {
+    saltCache.set(cleanUser, salt);
+  }
+  return data;
 }
 
 async function dbAuthenticateUser(username, password) {
@@ -543,62 +534,54 @@ async function dbAuthenticateUser(username, password) {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Database service is not configured.');
 
-  try {
-    let salt = saltCache.get(cleanUser);
-    if (!salt) {
-      const { data: saltData, error: saltErr } = await supabase.rpc('todocli_get_salt', { p_username: cleanUser });
-      if (!saltErr && saltData && saltData.length > 0 && saltData[0].salt) {
-        salt = saltData[0].salt;
-        saltCache.set(cleanUser, salt);
+  let salt = saltCache.get(cleanUser);
+  if (!salt) {
+    const { data: saltData, error: saltErr } = await supabase.rpc('todocli_get_salt', { p_username: cleanUser });
+    if (saltErr) {
+      if (saltErr.code === 'PGRST202' || saltErr.message?.includes('function') || saltErr.message?.includes('not found')) {
+        return {
+          success: false,
+          message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor to enable secure procedures and Row Level Security.'
+        };
       }
+      return { success: false, message: `Database error: ${saltErr.message}` };
     }
-
-    if (salt) {
-      const hash = await hashPassword(password, salt);
-      const { data: authData, error: authErr } = await supabase.rpc('todocli_authenticate', {
-        p_username: cleanUser,
-        p_password_hash: hash
-      });
-      if (!authErr && authData) {
-        if (authData.success) {
-          resetAuthRateLimit(cleanUser);
-          return { success: true, user: { username: cleanUser, password_hash: hash, password_salt: salt } };
-        } else {
-          recordFailedAuth(cleanUser);
-          const postLockout = checkAuthRateLimit(cleanUser);
-          if (!postLockout.allowed) return { success: false, message: postLockout.message };
-          return { success: false, message: authData.message || 'Authentication failed: Invalid username or password.' };
-        }
-      }
+    if (saltData && saltData.length > 0 && saltData[0].salt) {
+      salt = saltData[0].salt;
+      saltCache.set(cleanUser, salt);
     }
-  } catch (e) {}
+  }
 
-  // Legacy fallback
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('username', cleanUser)
-    .maybeSingle();
-
-  if (error) throw new Error(`Database error during authentication: ${error.message}`);
-  if (!user) {
+  if (!salt) {
     recordFailedAuth(cleanUser);
-    const postLockout = checkAuthRateLimit(cleanUser);
-    if (!postLockout.allowed) return { success: false, message: postLockout.message };
     return { success: false, message: 'Authentication failed: Invalid username or password.' };
   }
 
-  const computedHash = await hashPassword(password, user.password_salt);
-  if (computedHash !== user.password_hash) {
+  const hash = await hashPassword(password, salt);
+  const { data: authData, error: authErr } = await supabase.rpc('todocli_authenticate', {
+    p_username: cleanUser,
+    p_password_hash: hash
+  });
+
+  if (authErr) {
+    if (authErr.code === 'PGRST202' || authErr.message?.includes('function') || authErr.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor to enable secure procedures and Row Level Security.'
+      };
+    }
+    return { success: false, message: `Database error: ${authErr.message}` };
+  }
+
+  if (authData && authData.success) {
+    resetAuthRateLimit(cleanUser);
+    return { success: true, user: { username: cleanUser, password_hash: hash, password_salt: salt } };
+  } else {
     recordFailedAuth(cleanUser);
     const postLockout = checkAuthRateLimit(cleanUser);
     if (!postLockout.allowed) return { success: false, message: postLockout.message };
-    return { success: false, message: 'Authentication failed: Invalid username or password.' };
+    return { success: false, message: authData?.message || 'Authentication failed: Invalid username or password.' };
   }
-
-  resetAuthRateLimit(cleanUser);
-  saltCache.set(cleanUser, user.password_salt);
-  return { success: true, user };
 }
 
 async function dbListTasks(username, password) {
@@ -608,24 +591,29 @@ async function dbListTasks(username, password) {
   const supabase = getSupabase();
   const cleanUser = username.trim();
 
-  try {
-    const { data, error } = await supabase.rpc('todocli_list_tasks', {
-      p_username: cleanUser,
-      p_password_hash: auth.user.password_hash
-    });
-    if (!error && data && data.success) {
-      const tasks = data.tasks || [];
-      if (tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
-      const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
-      return { success: true, message: formatted, tasks };
-    }
-  } catch (e) {}
+  const { data, error } = await supabase.rpc('todocli_list_tasks', {
+    p_username: cleanUser,
+    p_password_hash: auth.user.password_hash
+  });
 
-  // Legacy fallback
-  const { tasks } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
-  if (!tasks || tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
-  const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
-  return { success: true, message: formatted, tasks };
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor.'
+      };
+    }
+    return { success: false, message: `Database error while listing tasks: ${error.message}` };
+  }
+
+  if (data && data.success) {
+    const tasks = data.tasks || [];
+    if (tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
+    const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
+    return { success: true, message: formatted, tasks };
+  }
+
+  return { success: false, message: data?.message || 'Failed to list tasks.' };
 }
 
 async function dbAddTask(username, password, taskName) {
@@ -635,26 +623,23 @@ async function dbAddTask(username, password, taskName) {
   const supabase = getSupabase();
   const cleanUser = username.trim();
 
-  try {
-    const { data, error } = await supabase.rpc('todocli_add_task', {
-      p_username: cleanUser,
-      p_password_hash: auth.user.password_hash,
-      p_task_name: taskName
-    });
-    if (!error && data) return data;
-  } catch (e) {}
+  const { data, error } = await supabase.rpc('todocli_add_task', {
+    p_username: cleanUser,
+    p_password_hash: auth.user.password_hash,
+    p_task_name: taskName
+  });
 
-  // Legacy fallback
-  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
-  const nextPos = tasks.length + 1;
-  let res;
-  if (hasPosition) {
-    res = await supabase.from('tasks').insert([{ username: cleanUser, task_name: taskName, position: nextPos }]);
-  } else {
-    res = await supabase.from('tasks').insert([{ username: cleanUser, task_name: taskName }]);
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor.'
+      };
+    }
+    return { success: false, message: `Database error while adding task: ${error.message}` };
   }
-  if (res.error) throw new Error(`Database error while adding task: ${res.error.message}`);
-  return { success: true, message: `Task added: "${taskName}"` };
+
+  return data || { success: true, message: `Task added: "${taskName}"` };
 }
 
 async function dbDeleteTask(username, password, taskNumberInput) {
@@ -685,46 +670,23 @@ async function dbDeleteTask(username, password, taskNumberInput) {
   const supabase = getSupabase();
   const cleanUser = username.trim();
 
-  try {
-    const { data, error } = await supabase.rpc('todocli_delete_tasks', {
-      p_username: cleanUser,
-      p_password_hash: auth.user.password_hash,
-      p_task_numbers: rawNumbers
-    });
-    if (!error && data) return data;
-  } catch (e) {}
+  const { data, error } = await supabase.rpc('todocli_delete_tasks', {
+    p_username: cleanUser,
+    p_password_hash: auth.user.password_hash,
+    p_task_numbers: rawNumbers
+  });
 
-  // Legacy fallback
-  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
-  if (!tasks || tasks.length === 0) {
-    return { success: false, message: `Error: Task not found. No tasks exist for user '${cleanUser}'.` };
-  }
-
-  for (const num of rawNumbers) {
-    if (num < 1 || num > tasks.length) {
-      return { success: false, message: `Error: Task #${num} not found. Use 'list' to view current tasks.` };
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor.'
+      };
     }
+    return { success: false, message: `Database error while deleting task: ${error.message}` };
   }
 
-  const uniqueNumbers = Array.from(new Set(rawNumbers)).sort((a, b) => a - b);
-  const targetTasks = uniqueNumbers.map(num => ({ number: num, task: tasks[num - 1] }));
-  const targetIds = targetTasks.map(t => t.task.id);
-
-  const { error: deleteError } = await supabase.from('tasks').delete().in('id', targetIds);
-  if (deleteError) throw new Error(`Database error while deleting task: ${deleteError.message}`);
-
-  if (hasPosition) {
-    const targetIdSet = new Set(targetIds);
-    const remaining = tasks.filter(t => !targetIdSet.has(t.id));
-    for (let i = 0; i < remaining.length; i++) {
-      await supabase.from('tasks').update({ position: i + 1 }).eq('id', remaining[i].id);
-    }
-  }
-
-  if (targetTasks.length === 1) {
-    return { success: true, message: `Task #${targetTasks[0].number} deleted: "${targetTasks[0].task.task_name}"` };
-  }
-  return { success: true, message: targetTasks.map(t => `Task #${t.number} deleted: "${t.task.task_name}"`).join('\n') };
+  return data;
 }
 
 async function dbPriorityTask(username, password, fromNumber, toNumber) {
@@ -734,42 +696,24 @@ async function dbPriorityTask(username, password, fromNumber, toNumber) {
   const supabase = getSupabase();
   const cleanUser = username.trim();
 
-  try {
-    const { data, error } = await supabase.rpc('todocli_priority_task', {
-      p_username: cleanUser,
-      p_password_hash: auth.user.password_hash,
-      p_from: fromNumber,
-      p_to: toNumber
-    });
-    if (!error && data) return data;
-  } catch (e) {}
+  const { data, error } = await supabase.rpc('todocli_priority_task', {
+    p_username: cleanUser,
+    p_password_hash: auth.user.password_hash,
+    p_from: fromNumber,
+    p_to: toNumber
+  });
 
-  // Legacy fallback
-  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
-  if (tasks.length === 0) return { success: false, message: `No tasks found for user '${cleanUser}'.` };
-  if (fromNumber < 1 || fromNumber > tasks.length) {
-    return { success: false, message: `Error: Source task #${fromNumber} not found. Valid range is 1 to ${tasks.length}.` };
-  }
-  if (toNumber < 1 || toNumber > tasks.length) {
-    return { success: false, message: `Error: Target position #${toNumber} is out of bounds. Valid range is 1 to ${tasks.length}.` };
-  }
-
-  const reordered = [...tasks];
-  const [movedTask] = reordered.splice(fromNumber - 1, 1);
-  reordered.splice(toNumber - 1, 0, movedTask);
-
-  if (hasPosition) {
-    for (let i = 0; i < reordered.length; i++) {
-      await supabase.from('tasks').update({ position: i + 1 }).eq('id', reordered[i].id);
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor.'
+      };
     }
-    return { success: true, message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"` };
+    return { success: false, message: `Database error while reordering task: ${error.message}` };
   }
 
-  const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
-  for (let i = 0; i < sortedSlotIds.length; i++) {
-    await supabase.from('tasks').update({ task_name: reordered[i].task_name }).eq('id', sortedSlotIds[i]);
-  }
-  return { success: true, message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"` };
+  return data;
 }
 
 async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
