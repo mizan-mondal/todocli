@@ -3,11 +3,22 @@ import { createClient } from '@supabase/supabase-js';
 const CONFIG_STORAGE_KEY = 'todocli_supabase_config';
 let supabaseClient = null;
 
+// In-memory salt cache to minimize network roundtrips during session operations
+const saltCache = new Map();
+
 /**
- * Retrieve active Supabase credentials from environment or browser config
+ * Retrieve active Supabase credentials from deployment environment (Vercel) or browser config
  */
 export function getSupabaseConfig() {
-  // 1. Check browser override first
+  // 1. Check deployment environment variables first (Vercel / Vite - authoritative)
+  const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+  const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+  if (envUrl && envKey && !envUrl.includes('your-project-id')) {
+    return { url: envUrl, key: envKey, source: 'env' };
+  }
+
+  // 2. Fallback to browser configuration for local developer testing
   try {
     const stored = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (stored) {
@@ -17,14 +28,6 @@ export function getSupabaseConfig() {
       }
     }
   } catch (e) {}
-
-  // 2. Check Vite environment variables
-  const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-  const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
-
-  if (envUrl && envKey && !envUrl.includes('your-project-id')) {
-    return { url: envUrl, key: envKey, source: 'env' };
-  }
 
   return { url: '', key: '', source: 'none' };
 }
@@ -75,20 +78,48 @@ export async function hashPassword(password, hexSalt) {
 }
 
 // =============================================================================
-// Supabase Database Operations
+// Supabase Database Operations (Protected via Stored Procedures & RLS)
 // =============================================================================
 
 export async function dbCreateUser(username, password) {
   const supabase = getSupabase();
   if (!supabase) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('Database service is not configured.');
   }
 
-  // Check if username already exists in Supabase
+  const cleanUser = username.trim();
+  const salt = generateHexSalt();
+  const hash = await hashPassword(password, salt);
+
+  // 1. Attempt secure RPC call (preferred, RLS-enforced)
+  try {
+    const { data, error } = await supabase.rpc('todocli_create_user', {
+      p_username: cleanUser,
+      p_password_hash: hash,
+      p_password_salt: salt
+    });
+
+    if (!error && data) {
+      if (data.success) {
+        saltCache.set(cleanUser, salt);
+      }
+      return data;
+    }
+    // If error is other than function missing, throw
+    if (error && !error.message?.includes('function') && error.code !== 'PGRST202') {
+      throw new Error(`Database error while creating user: ${error.message}`);
+    }
+  } catch (rpcErr) {
+    if (!rpcErr.message?.includes('function') && !rpcErr.message?.includes('PGRST202')) {
+      throw rpcErr;
+    }
+  }
+
+  // 2. Direct fallback (for legacy schema without RPC migration)
   const { data: existing, error: checkError } = await supabase
     .from('users')
     .select('username')
-    .eq('username', username)
+    .eq('username', cleanUser)
     .maybeSingle();
 
   if (checkError) {
@@ -96,33 +127,70 @@ export async function dbCreateUser(username, password) {
   }
 
   if (existing) {
-    return { success: false, message: `Error: User '${username}' already exists.` };
+    return { success: false, message: `Error: User '${cleanUser}' already exists.` };
   }
-
-  const salt = generateHexSalt();
-  const hash = await hashPassword(password, salt);
 
   const { error: insertError } = await supabase
     .from('users')
-    .insert([{ username, password_hash: hash, password_salt: salt }]);
+    .insert([{ username: cleanUser, password_hash: hash, password_salt: salt }]);
 
   if (insertError) {
     throw new Error(`Database error while creating user: ${insertError.message}`);
   }
 
-  return { success: true, message: `User '${username}' created successfully in Supabase.` };
+  saltCache.set(cleanUser, salt);
+  return { success: true, message: `User '${cleanUser}' created successfully.` };
 }
 
 export async function dbAuthenticateUser(username, password) {
   const supabase = getSupabase();
   if (!supabase) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('Database service is not configured.');
   }
 
+  const cleanUser = username.trim();
+
+  // 1. Attempt secure RPC authentication
+  try {
+    let salt = saltCache.get(cleanUser);
+    if (!salt) {
+      const { data: saltData, error: saltError } = await supabase.rpc('todocli_get_salt', {
+        p_username: cleanUser
+      });
+
+      if (!saltError && saltData && saltData.length > 0 && saltData[0].salt) {
+        salt = saltData[0].salt;
+        saltCache.set(cleanUser, salt);
+      }
+    }
+
+    if (salt) {
+      const hash = await hashPassword(password, salt);
+      const { data: authData, error: authError } = await supabase.rpc('todocli_authenticate', {
+        p_username: cleanUser,
+        p_password_hash: hash
+      });
+
+      if (!authError && authData) {
+        if (authData.success) {
+          return {
+            success: true,
+            user: { username: cleanUser, password_hash: hash, password_salt: salt }
+          };
+        } else {
+          return { success: false, message: authData.message || 'Authentication failed: Invalid username or password.' };
+        }
+      }
+    }
+  } catch (rpcErr) {
+    // If RPC is missing, continue to legacy fallback
+  }
+
+  // 2. Direct fallback (for legacy schema without RPC migration)
   const { data: user, error } = await supabase
     .from('users')
     .select('*')
-    .eq('username', username)
+    .eq('username', cleanUser)
     .maybeSingle();
 
   if (error) {
@@ -138,10 +206,11 @@ export async function dbAuthenticateUser(username, password) {
     return { success: false, message: 'Authentication failed: Invalid username or password.' };
   }
 
+  saltCache.set(cleanUser, user.password_salt);
   return { success: true, user };
 }
 
-async function fetchUserTasks(supabase, username) {
+async function fetchUserTasksLegacy(supabase, username) {
   let hasPosition = true;
   let { data: tasks, error } = await supabase
     .from('tasks')
@@ -175,10 +244,29 @@ export async function dbListTasks(username, password) {
   }
 
   const supabase = getSupabase();
-  const { tasks } = await fetchUserTasks(supabase, username);
+  const cleanUser = username.trim();
 
+  // 1. Attempt secure RPC call
+  try {
+    const { data, error } = await supabase.rpc('todocli_list_tasks', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash
+    });
+
+    if (!error && data && data.success) {
+      const tasks = data.tasks || [];
+      if (tasks.length === 0) {
+        return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
+      }
+      const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
+      return { success: true, message: formatted, tasks };
+    }
+  } catch (rpcErr) {}
+
+  // 2. Legacy fallback
+  const { tasks } = await fetchUserTasksLegacy(supabase, cleanUser);
   if (!tasks || tasks.length === 0) {
-    return { success: true, message: `No tasks found for user '${username}'.`, tasks: [] };
+    return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
   }
 
   const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
@@ -192,26 +280,42 @@ export async function dbAddTask(username, password, taskName) {
   }
 
   const supabase = getSupabase();
-  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
+  const cleanUser = username.trim();
+
+  // 1. Attempt secure RPC call
+  try {
+    const { data, error } = await supabase.rpc('todocli_add_task', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_task_name: taskName
+    });
+
+    if (!error && data) {
+      return data;
+    }
+  } catch (rpcErr) {}
+
+  // 2. Legacy fallback
+  const { tasks, hasPosition } = await fetchUserTasksLegacy(supabase, cleanUser);
   const nextPos = tasks.length + 1;
 
   let error = null;
   if (hasPosition) {
     const res = await supabase
       .from('tasks')
-      .insert([{ username, task_name: taskName, position: nextPos }]);
+      .insert([{ username: cleanUser, task_name: taskName, position: nextPos }]);
     error = res.error;
   } else {
     const res = await supabase
       .from('tasks')
-      .insert([{ username, task_name: taskName }]);
+      .insert([{ username: cleanUser, task_name: taskName }]);
     error = res.error;
   }
 
   if (error && error.message && error.message.toLowerCase().includes('position')) {
     const fallback = await supabase
       .from('tasks')
-      .insert([{ username, task_name: taskName }]);
+      .insert([{ username: cleanUser, task_name: taskName }]);
     error = fallback.error;
   }
 
@@ -226,16 +330,6 @@ export async function dbDeleteTask(username, password, taskNumberInput) {
   const auth = await dbAuthenticateUser(username, password);
   if (!auth.success) {
     return { success: false, message: auth.message };
-  }
-
-  const supabase = getSupabase();
-  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
-
-  if (!tasks || tasks.length === 0) {
-    return {
-      success: false,
-      message: `Error: Task not found. No tasks exist for user '${username}'.`
-    };
   }
 
   let rawNumbers = [];
@@ -265,6 +359,32 @@ export async function dbDeleteTask(username, password, taskNumberInput) {
     };
   }
 
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  // 1. Attempt secure RPC call
+  try {
+    const { data, error } = await supabase.rpc('todocli_delete_tasks', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_task_numbers: rawNumbers
+    });
+
+    if (!error && data) {
+      return data;
+    }
+  } catch (rpcErr) {}
+
+  // 2. Legacy fallback
+  const { tasks, hasPosition } = await fetchUserTasksLegacy(supabase, cleanUser);
+
+  if (!tasks || tasks.length === 0) {
+    return {
+      success: false,
+      message: `Error: Task not found. No tasks exist for user '${cleanUser}'.`
+    };
+  }
+
   for (const num of rawNumbers) {
     if (num < 1 || num > tasks.length) {
       return {
@@ -287,7 +407,6 @@ export async function dbDeleteTask(username, password, taskNumberInput) {
     throw new Error(`Database error while deleting task: ${deleteError.message}`);
   }
 
-  // Re-sequence remaining tasks positions only if position column exists
   if (hasPosition) {
     const targetIdSet = new Set(targetIds);
     const remaining = tasks.filter(t => !targetIdSet.has(t.id));
@@ -314,10 +433,27 @@ export async function dbPriorityTask(username, password, fromNumber, toNumber) {
   }
 
   const supabase = getSupabase();
-  const { tasks, hasPosition } = await fetchUserTasks(supabase, username);
+  const cleanUser = username.trim();
+
+  // 1. Attempt secure RPC call
+  try {
+    const { data, error } = await supabase.rpc('todocli_priority_task', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_from: fromNumber,
+      p_to: toNumber
+    });
+
+    if (!error && data) {
+      return data;
+    }
+  } catch (rpcErr) {}
+
+  // 2. Legacy fallback
+  const { tasks, hasPosition } = await fetchUserTasksLegacy(supabase, cleanUser);
 
   if (tasks.length === 0) {
-    return { success: false, message: `No tasks found for user '${username}'.` };
+    return { success: false, message: `No tasks found for user '${cleanUser}'.` };
   }
 
   if (fromNumber < 1 || fromNumber > tasks.length) {
@@ -334,13 +470,11 @@ export async function dbPriorityTask(username, password, fromNumber, toNumber) {
     };
   }
 
-  // Move task from fromNumber to toNumber (1-based to 0-based)
   const reordered = [...tasks];
   const [movedTask] = reordered.splice(fromNumber - 1, 1);
   reordered.splice(toNumber - 1, 0, movedTask);
 
   if (hasPosition) {
-    // Attempt updating 'position' column
     let positionUpdateSucceeded = true;
     for (let i = 0; i < reordered.length; i++) {
       const { error: updateErr } = await supabase
@@ -365,8 +499,6 @@ export async function dbPriorityTask(username, password, fromNumber, toNumber) {
     }
   }
 
-  // Fallback for tables without 'position' column:
-  // Re-assign task_name in sorted id slots so order('id', { ascending: true }) matches reordered priority
   const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
   for (let i = 0; i < sortedSlotIds.length; i++) {
     const slotId = sortedSlotIds[i];

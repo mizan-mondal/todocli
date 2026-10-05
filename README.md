@@ -51,18 +51,15 @@ todocli/
 2. In the Supabase Dashboard, go to **SQL Editor** &rarr; **New Query**.
 3. Copy and run the SQL script located in [`supabase/schema.sql`](file:///c:/Users/mizan/Desktop/todocli/supabase/schema.sql). This creates the `users` and `tasks` tables, deterministic indexes, and RLS policies.
 
-### 2. Configure Credentials
-You can configure credentials in either of two ways:
+### 2. Configure Credentials (Admin Access via Vercel / Environment)
+Database connection credentials are treated as administrative configuration and are managed securely via environment settings (never exposed to public terminal users):
 
-- **Option A (Environment Variables)**: Add your project credentials to `.env`:
+- **Local Development**: Add your project credentials to `.env`:
   ```env
   VITE_SUPABASE_URL=https://your-project-id.supabase.co
   VITE_SUPABASE_ANON_KEY=your-anon-key-here
   ```
-- **Option B (Directly in the Terminal)**: Launch the app and run:
-  ```text
-  config supabase https://your-project-id.supabase.co your-anon-key-here
-  ```
+- **Production (Vercel)**: In your Vercel Project Dashboard, navigate to **Settings** &rarr; **Environment Variables** and add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 
 ---
 
@@ -70,12 +67,12 @@ You can configure credentials in either of two ways:
 
 | Command Syntax | Description | Example |
 |---|---|---|
-| `<username> <password> create` | Register a new user account in Supabase | `mizan mypassword create` |
+| `<username> <password> create` | Register a new user account | `mizan mypassword create` |
 | `<username> <password> login` | Log in and persist session offline in browser | `mizan mypassword login` |
 | `<username> <password> logout` | Log out and clear browser session | `mizan mypassword logout` |
-| `<username> <password> list` / `ls` | List all tasks from Supabase with serial numbers | `mizan mypassword list` |
-| `<username> <password> add task <task_name>` | Add a new task to Supabase | `mizan mypassword add task Buy groceries` |
-| `<username> <password> delete task <task_numbers>` | Delete one or more tasks from Supabase using serial numbers | `mizan mypassword delete task 1,2,5` |
+| `<username> <password> list` / `ls` | List all tasks with serial numbers | `mizan mypassword list` |
+| `<username> <password> add task <task_name>` | Add a new task | `mizan mypassword add task Buy groceries` |
+| `<username> <password> delete task <task_numbers>` | Delete one or more tasks using serial numbers | `mizan mypassword delete task 1,2,5` |
 | `<username> <password> priority <from> to <to>` | Reorder a task by moving it to a new priority position | `mizan mypassword priority 3 to 1` |
 | **When Logged In (Shortcut Commands)** | | |
 | `list` / `ls` | List tasks for the currently logged-in user | `ls` |
@@ -84,10 +81,7 @@ You can configure credentials in either of two ways:
 | `priority <from> to <to>` | Move task to a new priority position | `priority 3 to 1` |
 | `whoami` | Display active logged-in user | `whoami` |
 | `logout` | Log out the active session | `logout` |
-| **Configuration & Utilities** | | |
-| `config supabase <url> <anon_key>` | Configure Supabase credentials in the terminal | `config supabase https://xyz.supabase.co eyJhb...` |
-| `config supabase status` | Check current Supabase connection status | `config supabase status` |
-| `config supabase clear` | Clear stored browser Supabase credentials | `config supabase clear` |
+| **Utilities** | | |
 | `clear` / `cls` | Clear the terminal display | `clear` |
 | `help` | Display the command usage manual | `help` |
 

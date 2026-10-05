@@ -21,7 +21,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
 ]);
 
 /**
@@ -179,8 +179,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -191,13 +191,13 @@ function handleAutocomplete() {
 
 function getHelpText() {
   return [
-    'todocli Commands (Cloud-Synced via Supabase):',
-    '  <username> <password> create                   - Register a new account in Supabase',
-    '  <username> <password> login                    - Log in & store session offline in browser',
-    '  <username> <password> logout                   - Log out & clear browser session',
-    '  <username> <password> list / ls                - List all tasks from Supabase',
-    '  <username> <password> add task <task_name>     - Add task to Supabase',
-    '  <username> <password> delete task <task_numbers>- Delete tasks from Supabase (e.g. 1 or 1,2,5)',
+    'todocli Commands:',
+    '  <username> <password> create                   - Register a new account',
+    '  <username> <password> login                    - Log in and save session in browser',
+    '  <username> <password> logout                   - Log out and clear session',
+    '  <username> <password> list / ls                - List all tasks',
+    '  <username> <password> add task <task_name>     - Add a new task',
+    '  <username> <password> delete task <task_numbers>- Delete tasks by number (e.g. 1 or 1,2,5)',
     '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
@@ -208,10 +208,7 @@ function getHelpText() {
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
     '',
-    'Configuration & Utilities:',
-    '  config supabase <url> <anon_key>               - Set Supabase credentials',
-    '  config supabase status                         - View Supabase connection status',
-    '  config supabase clear                          - Clear stored browser Supabase credentials',
+    'Utilities:',
     '  clear / cls                                    - Clear terminal screen',
     '  help                                           - Display this manual'
   ].join('\n');
@@ -221,7 +218,8 @@ async function executeCommand() {
   const raw = cliInput.value.trim();
   if (!raw) return;
 
-  commandHistory.push(raw);
+  // Mask credentials before persisting to command history
+  commandHistory.push(maskCommand(raw));
   if (commandHistory.length > 100) commandHistory.shift();
   localStorage.setItem('todocli_history', JSON.stringify(commandHistory));
   historyIndex = -1;
@@ -254,8 +252,8 @@ async function executeCommand() {
     return;
   }
 
-  // Handle Supabase configuration commands
-  if (lower.startsWith('config supabase') || lower === 'supabase status') {
+  // Handle configuration commands with credential masking
+  if (lower.startsWith('config supabase') || lower === 'supabase status' || lower === 'config status') {
     handleSupabaseConfigCommand(raw, activePrompt);
     return;
   }
@@ -284,9 +282,8 @@ async function executeCommand() {
   if (!isSupabaseConfigured()) {
     appendHistory(
       raw,
-      'Error: Supabase is not configured.\n' +
-      'Run in terminal: config supabase <SUPABASE_URL> <SUPABASE_ANON_KEY>\n' +
-      'See supabase/schema.sql for the database setup script.',
+      'Error: Cloud database service is not configured.\n' +
+      'Please configure environment variables in your deployment dashboard (e.g. Vercel) or contact administrator.',
       'error',
       activePrompt
     );
@@ -299,22 +296,25 @@ async function executeCommand() {
 function handleSupabaseConfigCommand(raw, activePrompt) {
   const parts = raw.split(/\s+/);
 
+  // Status check: never disclose raw endpoint URL or keys
   if (parts.length === 2 || (parts.length === 3 && parts[2].toLowerCase() === 'status')) {
     const config = getSupabaseConfig();
     if (config.url && config.key) {
-      const maskedKey = config.key.length > 12 
-        ? `${config.key.substring(0, 8)}...${config.key.substring(config.key.length - 4)}` 
-        : '***';
       appendHistory(
         raw,
-        `Supabase Configuration:\n  Status: Connected\n  URL: ${config.url}\n  Anon Key: ${maskedKey}`,
+        'Database Configuration:\n' +
+        '  Status: Connected (Protected)\n' +
+        '  Access Control: Active (Row-Level Security & Credential Isolation)\n' +
+        '  Admin Access: Managed via Vercel / Supabase Settings',
         'success',
         activePrompt
       );
     } else {
       appendHistory(
         raw,
-        'Supabase Configuration:\n  Status: Not configured\n  Usage: config supabase <URL> <ANON_KEY>',
+        'Database Configuration:\n' +
+        '  Status: Not configured\n' +
+        '  Notice: Administrative deployment credentials (Vercel) required.',
         'error',
         activePrompt
       );
@@ -322,36 +322,45 @@ function handleSupabaseConfigCommand(raw, activePrompt) {
     return;
   }
 
+  // Clear credentials
   if (parts.length === 3 && parts[2].toLowerCase() === 'clear') {
     clearSupabaseConfig();
-    appendHistory(raw, 'Browser-stored Supabase credentials cleared.', 'success', activePrompt);
+    appendHistory(raw, 'Browser-stored database credentials cleared.', 'success', activePrompt);
     return;
   }
 
+  // Manual configuration attempt
   if (parts.length >= 4) {
     const url = parts[2];
     const key = parts[3];
     try {
       new URL(url);
     } catch (e) {
-      appendHistory(raw, `Error: '${url}' is not a valid URL. Example: https://xyz.supabase.co`, 'error', activePrompt);
+      appendHistory(raw, `Error: '${url}' is not a valid URL.`, 'error', activePrompt);
       return;
     }
 
     setSupabaseConfig(url, key);
     appendHistory(
       raw,
-      `Supabase configured successfully!\nConnected to: ${url}\nStored in browser configuration.`,
+      'Database connection configured successfully! Status: Protected.',
       'success',
       activePrompt
     );
     return;
   }
 
-  appendHistory(raw, 'Usage: config supabase <URL> <ANON_KEY>\nOr: config supabase status\nOr: config supabase clear', 'error', activePrompt);
+  appendHistory(
+    raw,
+    'Database Configuration:\n  Status: Protected\n  Admin access managed via Vercel or Supabase.',
+    'error',
+    activePrompt
+  );
 }
 
 // Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
+const saltCache = new Map();
+
 function generateHexSalt() {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -366,7 +375,7 @@ async function hashPassword(password, hexSalt) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function fetchFrontendUserTasks(supabase, username) {
+async function fetchFrontendUserTasksLegacy(supabase, username) {
   let hasPosition = true;
   let { data: tasks, error } = await supabase
     .from('tasks')
@@ -393,6 +402,267 @@ async function fetchFrontendUserTasks(supabase, username) {
   return { tasks: tasks || [], hasPosition };
 }
 
+async function dbCreateUser(username, password) {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Database service is not configured.');
+
+  const cleanUser = username.trim();
+  const salt = generateHexSalt();
+  const hash = await hashPassword(password, salt);
+
+  try {
+    const { data, error } = await supabase.rpc('todocli_create_user', {
+      p_username: cleanUser,
+      p_password_hash: hash,
+      p_password_salt: salt
+    });
+    if (!error && data) {
+      if (data.success) saltCache.set(cleanUser, salt);
+      return data;
+    }
+  } catch (e) {}
+
+  // Legacy fallback
+  const { data: existing, error: checkError } = await supabase
+    .from('users')
+    .select('username')
+    .eq('username', cleanUser)
+    .maybeSingle();
+
+  if (checkError) throw new Error(`Database error while checking user: ${checkError.message}`);
+  if (existing) return { success: false, message: `Error: User '${cleanUser}' already exists.` };
+
+  const { error: insertError } = await supabase
+    .from('users')
+    .insert([{ username: cleanUser, password_hash: hash, password_salt: salt }]);
+
+  if (insertError) throw new Error(`Database error while creating user: ${insertError.message}`);
+  saltCache.set(cleanUser, salt);
+  return { success: true, message: `User '${cleanUser}' created successfully.` };
+}
+
+async function dbAuthenticateUser(username, password) {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Database service is not configured.');
+
+  const cleanUser = username.trim();
+
+  try {
+    let salt = saltCache.get(cleanUser);
+    if (!salt) {
+      const { data: saltData, error: saltErr } = await supabase.rpc('todocli_get_salt', { p_username: cleanUser });
+      if (!saltErr && saltData && saltData.length > 0 && saltData[0].salt) {
+        salt = saltData[0].salt;
+        saltCache.set(cleanUser, salt);
+      }
+    }
+
+    if (salt) {
+      const hash = await hashPassword(password, salt);
+      const { data: authData, error: authErr } = await supabase.rpc('todocli_authenticate', {
+        p_username: cleanUser,
+        p_password_hash: hash
+      });
+      if (!authErr && authData) {
+        if (authData.success) {
+          return { success: true, user: { username: cleanUser, password_hash: hash, password_salt: salt } };
+        } else {
+          return { success: false, message: authData.message || 'Authentication failed: Invalid username or password.' };
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Legacy fallback
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('username', cleanUser)
+    .maybeSingle();
+
+  if (error) throw new Error(`Database error during authentication: ${error.message}`);
+  if (!user) return { success: false, message: 'Authentication failed: Invalid username or password.' };
+
+  const computedHash = await hashPassword(password, user.password_salt);
+  if (computedHash !== user.password_hash) {
+    return { success: false, message: 'Authentication failed: Invalid username or password.' };
+  }
+
+  saltCache.set(cleanUser, user.password_salt);
+  return { success: true, user };
+}
+
+async function dbListTasks(username, password) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) return { success: false, message: auth.message };
+
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  try {
+    const { data, error } = await supabase.rpc('todocli_list_tasks', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash
+    });
+    if (!error && data && data.success) {
+      const tasks = data.tasks || [];
+      if (tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
+      const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
+      return { success: true, message: formatted, tasks };
+    }
+  } catch (e) {}
+
+  // Legacy fallback
+  const { tasks } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
+  if (!tasks || tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
+  const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
+  return { success: true, message: formatted, tasks };
+}
+
+async function dbAddTask(username, password, taskName) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) return { success: false, message: auth.message };
+
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  try {
+    const { data, error } = await supabase.rpc('todocli_add_task', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_task_name: taskName
+    });
+    if (!error && data) return data;
+  } catch (e) {}
+
+  // Legacy fallback
+  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
+  const nextPos = tasks.length + 1;
+  let res;
+  if (hasPosition) {
+    res = await supabase.from('tasks').insert([{ username: cleanUser, task_name: taskName, position: nextPos }]);
+  } else {
+    res = await supabase.from('tasks').insert([{ username: cleanUser, task_name: taskName }]);
+  }
+  if (res.error) throw new Error(`Database error while adding task: ${res.error.message}`);
+  return { success: true, message: `Task added: "${taskName}"` };
+}
+
+async function dbDeleteTask(username, password, taskNumberInput) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) return { success: false, message: auth.message };
+
+  let rawNumbers = [];
+  if (Array.isArray(taskNumberInput)) {
+    rawNumbers = taskNumberInput;
+  } else if (typeof taskNumberInput === 'number') {
+    rawNumbers = [taskNumberInput];
+  } else if (typeof taskNumberInput === 'string') {
+    const parts = taskNumberInput.trim().split(/[,\s]+/);
+    for (const p of parts) {
+      if (!p) continue;
+      const parsed = parseInt(p, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        return { success: false, message: `Error: Invalid task number '${p}'. Must be a positive integer.` };
+      }
+      rawNumbers.push(parsed);
+    }
+  }
+
+  if (rawNumbers.length === 0) {
+    return { success: false, message: 'Error: Missing task number. Usage: delete task <task_number>' };
+  }
+
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  try {
+    const { data, error } = await supabase.rpc('todocli_delete_tasks', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_task_numbers: rawNumbers
+    });
+    if (!error && data) return data;
+  } catch (e) {}
+
+  // Legacy fallback
+  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
+  if (!tasks || tasks.length === 0) {
+    return { success: false, message: `Error: Task not found. No tasks exist for user '${cleanUser}'.` };
+  }
+
+  for (const num of rawNumbers) {
+    if (num < 1 || num > tasks.length) {
+      return { success: false, message: `Error: Task #${num} not found. Use 'list' to view current tasks.` };
+    }
+  }
+
+  const uniqueNumbers = Array.from(new Set(rawNumbers)).sort((a, b) => a - b);
+  const targetTasks = uniqueNumbers.map(num => ({ number: num, task: tasks[num - 1] }));
+  const targetIds = targetTasks.map(t => t.task.id);
+
+  const { error: deleteError } = await supabase.from('tasks').delete().in('id', targetIds);
+  if (deleteError) throw new Error(`Database error while deleting task: ${deleteError.message}`);
+
+  if (hasPosition) {
+    const targetIdSet = new Set(targetIds);
+    const remaining = tasks.filter(t => !targetIdSet.has(t.id));
+    for (let i = 0; i < remaining.length; i++) {
+      await supabase.from('tasks').update({ position: i + 1 }).eq('id', remaining[i].id);
+    }
+  }
+
+  if (targetTasks.length === 1) {
+    return { success: true, message: `Task #${targetTasks[0].number} deleted: "${targetTasks[0].task.task_name}"` };
+  }
+  return { success: true, message: targetTasks.map(t => `Task #${t.number} deleted: "${t.task.task_name}"`).join('\n') };
+}
+
+async function dbPriorityTask(username, password, fromNumber, toNumber) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) return { success: false, message: auth.message };
+
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  try {
+    const { data, error } = await supabase.rpc('todocli_priority_task', {
+      p_username: cleanUser,
+      p_password_hash: auth.user.password_hash,
+      p_from: fromNumber,
+      p_to: toNumber
+    });
+    if (!error && data) return data;
+  } catch (e) {}
+
+  // Legacy fallback
+  const { tasks, hasPosition } = await fetchFrontendUserTasksLegacy(supabase, cleanUser);
+  if (tasks.length === 0) return { success: false, message: `No tasks found for user '${cleanUser}'.` };
+  if (fromNumber < 1 || fromNumber > tasks.length) {
+    return { success: false, message: `Error: Source task #${fromNumber} not found. Valid range is 1 to ${tasks.length}.` };
+  }
+  if (toNumber < 1 || toNumber > tasks.length) {
+    return { success: false, message: `Error: Target position #${toNumber} is out of bounds. Valid range is 1 to ${tasks.length}.` };
+  }
+
+  const reordered = [...tasks];
+  const [movedTask] = reordered.splice(fromNumber - 1, 1);
+  reordered.splice(toNumber - 1, 0, movedTask);
+
+  if (hasPosition) {
+    for (let i = 0; i < reordered.length; i++) {
+      await supabase.from('tasks').update({ position: i + 1 }).eq('id', reordered[i].id);
+    }
+    return { success: true, message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"` };
+  }
+
+  const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
+  for (let i = 0; i < sortedSlotIds.length; i++) {
+    await supabase.from('tasks').update({ task_name: reordered[i].task_name }).eq('id', sortedSlotIds[i]);
+  }
+  return { success: true, message: `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"` };
+}
+
 async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   const tokens = commandToRun.split(/\s+/);
   if (tokens.length < 3) {
@@ -410,73 +680,22 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   const operation = tokens[2].toLowerCase();
   const remainderTokens = tokens.slice(3);
 
-  const supabase = getSupabase();
-  if (!supabase) {
-    appendHistory(displayCmd, 'Error: Supabase client could not be initialized.', 'error', activePrompt);
-    return;
-  }
-
   try {
-    if (operation === 'create') {
-      const { data: existing, error: checkError } = await supabase
-        .from('users')
-        .select('username')
-        .eq('username', username)
-        .maybeSingle();
-
-      if (checkError) {
-        appendHistory(displayCmd, `Database Error: ${checkError.message}`, 'error', activePrompt);
-        return;
-      }
-
-      if (existing) {
-        appendHistory(displayCmd, `Error: User '${username}' already exists.`, 'error', activePrompt);
-        return;
-      }
-
-      const salt = generateHexSalt();
-      const hash = await hashPassword(password, salt);
-
-      const { error: insertError } = await supabase
-        .from('users')
-        .insert([{ username, password_hash: hash, password_salt: salt }]);
-
-      if (insertError) {
-        appendHistory(displayCmd, `Database Error: ${insertError.message}`, 'error', activePrompt);
-        return;
-      }
-
-      appendHistory(displayCmd, `User '${username}' created successfully in Supabase.`, 'success', activePrompt);
-      return;
-    }
-
-    // Authenticate user credentials
-    const { data: user, error: authError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('username', username)
-      .maybeSingle();
-
-    if (authError) {
-      appendHistory(displayCmd, `Database Error: ${authError.message}`, 'error', activePrompt);
-      return;
-    }
-
-    if (!user) {
-      appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
-      return;
-    }
-
-    const computedHash = await hashPassword(password, user.password_salt);
-    if (computedHash !== user.password_hash) {
-      appendHistory(displayCmd, 'Authentication failed: Invalid username or password.', 'error', activePrompt);
-      return;
-    }
-
     switch (operation) {
+      case 'create': {
+        const result = await dbCreateUser(username, password);
+        appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
+        break;
+      }
+
       case 'login': {
-        saveSession({ username, password });
-        appendHistory(displayCmd, `User '${username}' logged in successfully.`, 'success', activePrompt);
+        const auth = await dbAuthenticateUser(username, password);
+        if (auth.success) {
+          saveSession({ username, password });
+          appendHistory(displayCmd, `User '${username}' logged in successfully.`, 'success', activePrompt);
+        } else {
+          appendHistory(displayCmd, auth.message, 'error', activePrompt);
+        }
         break;
       }
 
@@ -488,15 +707,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
 
       case 'list':
       case 'ls': {
-        const { tasks } = await fetchFrontendUserTasks(supabase, username);
-
-        if (!tasks || tasks.length === 0) {
-          appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
-          return;
-        }
-
-        const lines = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`);
-        appendHistory(displayCmd, lines.join('\n'), '', activePrompt);
+        const result = await dbListTasks(username, password);
+        appendHistory(displayCmd, result.message, result.success ? '' : 'error', activePrompt);
         break;
       }
 
@@ -516,35 +728,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
-        const nextPos = tasks.length + 1;
-
-        let addError = null;
-        if (hasPosition) {
-          const res = await supabase
-            .from('tasks')
-            .insert([{ username, task_name: taskName, position: nextPos }]);
-          addError = res.error;
-        } else {
-          const res = await supabase
-            .from('tasks')
-            .insert([{ username, task_name: taskName }]);
-          addError = res.error;
-        }
-
-        if (addError && addError.message && addError.message.toLowerCase().includes('position')) {
-          const fallback = await supabase
-            .from('tasks')
-            .insert([{ username, task_name: taskName }]);
-          addError = fallback.error;
-        }
-
-        if (addError) {
-          appendHistory(displayCmd, `Database Error: ${addError.message}`, 'error', activePrompt);
-          return;
-        }
-
-        appendHistory(displayCmd, `Task added: "${taskName}"`, 'success', activePrompt);
+        const result = await dbAddTask(username, password, taskName);
+        appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
         break;
       }
 
@@ -564,81 +749,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const parts = taskNumStr.split(/[,\s]+/);
-        const rawNumbers = [];
-        let parseError = null;
-        for (const p of parts) {
-          if (!p) continue;
-          const parsed = parseInt(p, 10);
-          if (isNaN(parsed) || parsed < 1) {
-            parseError = `Error: Invalid task number '${p}'. Must be a positive integer.`;
-            break;
-          }
-          rawNumbers.push(parsed);
-        }
-
-        if (parseError) {
-          appendHistory(displayCmd, parseError, 'error', activePrompt);
-          return;
-        }
-
-        if (rawNumbers.length === 0) {
-          appendHistory(displayCmd, 'Error: Missing task number. Usage: delete task <task_number>', 'error', activePrompt);
-          return;
-        }
-
-        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
-
-        if (!tasks || tasks.length === 0) {
-          appendHistory(displayCmd, `Error: Task not found. No tasks exist for user '${username}'.`, 'error', activePrompt);
-          return;
-        }
-
-        let notFoundNum = null;
-        for (const num of rawNumbers) {
-          if (num < 1 || num > tasks.length) {
-            notFoundNum = num;
-            break;
-          }
-        }
-
-        if (notFoundNum !== null) {
-          appendHistory(displayCmd, `Error: Task #${notFoundNum} not found. Use 'list' to view current tasks.`, 'error', activePrompt);
-          return;
-        }
-
-        const uniqueNumbers = Array.from(new Set(rawNumbers)).sort((a, b) => a - b);
-        const targetTasks = uniqueNumbers.map(num => ({ number: num, task: tasks[num - 1] }));
-        const targetIds = targetTasks.map(t => t.task.id);
-
-        const { error: delError } = await supabase
-          .from('tasks')
-          .delete()
-          .in('id', targetIds);
-
-        if (delError) {
-          appendHistory(displayCmd, `Database Error: ${delError.message}`, 'error', activePrompt);
-          return;
-        }
-
-        // Re-sequence remaining tasks positions only if position column exists
-        if (hasPosition) {
-          const targetIdSet = new Set(targetIds);
-          const remaining = tasks.filter(t => !targetIdSet.has(t.id));
-          for (let i = 0; i < remaining.length; i++) {
-            await supabase
-              .from('tasks')
-              .update({ position: i + 1 })
-              .eq('id', remaining[i].id);
-          }
-        }
-
-        if (targetTasks.length === 1) {
-          appendHistory(displayCmd, `Task #${targetTasks[0].number} deleted: "${targetTasks[0].task.task_name}"`, 'success', activePrompt);
-        } else {
-          const msg = targetTasks.map(t => `Task #${t.number} deleted: "${t.task.task_name}"`).join('\n');
-          appendHistory(displayCmd, msg, 'success', activePrompt);
-        }
+        const result = await dbDeleteTask(username, password, taskNumStr);
+        appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
         break;
       }
 
@@ -675,67 +787,8 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           return;
         }
 
-        const { tasks, hasPosition } = await fetchFrontendUserTasks(supabase, username);
-        if (!tasks || tasks.length === 0) {
-          appendHistory(displayCmd, `No tasks found for user '${username}'.`, 'error', activePrompt);
-          return;
-        }
-
-        if (fromNumber > tasks.length) {
-          appendHistory(displayCmd, `Error: Source task #${fromNumber} not found. Valid range is 1 to ${tasks.length}.`, 'error', activePrompt);
-          return;
-        }
-
-        if (toNumber > tasks.length) {
-          appendHistory(displayCmd, `Error: Target position #${toNumber} is out of bounds. Valid range is 1 to ${tasks.length}.`, 'error', activePrompt);
-          return;
-        }
-
-        // Move task from fromNumber to toNumber (1-based to 0-based)
-        const reordered = [...tasks];
-        const [movedTask] = reordered.splice(fromNumber - 1, 1);
-        reordered.splice(toNumber - 1, 0, movedTask);
-
-        if (hasPosition) {
-          let positionUpdateSucceeded = true;
-          for (let i = 0; i < reordered.length; i++) {
-            const { error: updateErr } = await supabase
-              .from('tasks')
-              .update({ position: i + 1 })
-              .eq('id', reordered[i].id);
-
-            if (updateErr) {
-              if (updateErr.message && updateErr.message.toLowerCase().includes('position')) {
-                positionUpdateSucceeded = false;
-                break;
-              }
-              throw new Error(`Database error while updating task priority: ${updateErr.message}`);
-            }
-          }
-
-          if (positionUpdateSucceeded) {
-            appendHistory(displayCmd, `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`, 'success', activePrompt);
-            break;
-          }
-        }
-
-        // Fallback for tables without 'position' column:
-        // Re-assign task_name in sorted id slots so order('id', { ascending: true }) matches reordered priority
-        const sortedSlotIds = [...tasks].map(t => t.id).sort((a, b) => (a > b ? 1 : -1));
-        for (let i = 0; i < sortedSlotIds.length; i++) {
-          const slotId = sortedSlotIds[i];
-          const newTaskName = reordered[i].task_name;
-          const { error: slotErr } = await supabase
-            .from('tasks')
-            .update({ task_name: newTaskName })
-            .eq('id', slotId);
-
-          if (slotErr) {
-            throw new Error(`Database error while reordering tasks: ${slotErr.message}`);
-          }
-        }
-
-        appendHistory(displayCmd, `Task #${fromNumber} moved to position #${toNumber}: "${movedTask.task_name}"`, 'success', activePrompt);
+        const result = await dbPriorityTask(username, password, fromNumber, toNumber);
+        appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
         break;
       }
 

@@ -396,8 +396,7 @@ Commands adhere to a deterministic token format:
 ```ebnf
 CommandLine     ::= UtilityCommand | ExplicitCommand | ShortcutCommand ;
 
-UtilityCommand  ::= "help" | "clear" | "cls" | "whoami" | SupabaseConfig ;
-SupabaseConfig  ::= "config supabase" ( "status" | "clear" | ( <url> <anon_key> ) ) ;
+UtilityCommand  ::= "help" | "clear" | "cls" | "whoami" ;
 
 ExplicitCommand ::= <username> <password> Operation ;
 ShortcutCommand ::= ( "list" | "ls" | "add task " <task_name> | "delete task " <task_number> | "priority " <from> "to" <to> | "logout" ) ;
@@ -420,7 +419,7 @@ Operation       ::= "create"
 | `<user> <pass> create` | No | Creates a new account with a unique username and salted hash | `mizan secret123 create` |
 | `<user> <pass> login` | No (Validates) | Authenticates credentials and stores session in browser `localStorage` | `mizan secret123 login` |
 | `<user> <pass> logout` | Yes | Validates credentials and removes session from `localStorage` | `mizan secret123 logout` |
-| `<user> <pass> list` | Yes | Retrieves all tasks owned by user, sorted by ID ascending | `mizan secret123 list` |
+| `<user> <pass> list` | Yes | Retrieves all tasks owned by user, sorted by position ascending | `mizan secret123 list` |
 | `<user> <pass> ls` | Yes | **Exact alias for `list`** (Unix shortcut) | `mizan secret123 ls` |
 | `<user> <pass> add task <name>` | Yes | Inserts a new task associated with the authenticated user | `mizan secret123 add task Buy groceries` |
 | `<user> <pass> delete task <numbers>` | Yes | Resolves 1-based display serial numbers `<numbers>` (e.g. `2` or `1,2,5`) to database tasks and deletes them | `mizan secret123 delete task 1,2,5` |
@@ -434,9 +433,6 @@ Operation       ::= "create"
 | `whoami` | None | Displays current logged-in username or unauthenticated notice | `whoami` |
 | `logout` | Automatic | Clears current session from `localStorage` and resets prompt | `logout` |
 | **System Utilities** | | | |
-| `config supabase <url> <key>` | None | Persists custom Supabase credentials directly in browser storage | `config supabase https://xyz.supabase.co eyJhb...` |
-| `config supabase status` | None | Shows active Supabase connection status with masked anon key | `config supabase status` |
-| `config supabase clear` | None | Wipes browser-stored Supabase credentials | `config supabase clear` |
 | `clear` / `cls` | None | Instantly empties the terminal output viewport | `clear` |
 | `help` | None | Prints the complete built-in command reference guide | `help` |
 
@@ -520,8 +516,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -763,28 +759,21 @@ sequenceDiagram
 
 ### 10.1 Supabase Configuration Precedence
 
-The application determines active Supabase credentials using a strict three-tier cascade:
+The application securely determines active database credentials via administrative settings:
 
 ```mermaid
 graph TD
-    A[Check localStorage: 'todocli_supabase_config'] -->|Credentials Found?| B[Tier 1: Use Browser-Configured Override]
-    A -->|None| C[Check Vite import.meta.env]
-    C -->|VITE_SUPABASE_URL & ANON_KEY present?| D[Tier 2: Use Environment Variables]
-    C -->|None or Placeholder| E[Tier 3: Prompt User to run 'config supabase']
+    A[Check Deployment Environment Settings: Vercel / Vite env] -->|Credentials Found?| B[Tier 1: Use Administrative Deployment Credentials]
+    A -->|None / Local Dev| C[Fallback to Local Configuration]
+    C -->|None| D[Display Protected Unconfigured Notice]
 ```
 
-#### In-Terminal Dynamic Configuration
-Users can connect to any Supabase instance on-the-fly without rebuilding or editing environment variables:
-```bash
-# Connect to project
-config supabase https://xyzcompany.supabase.co eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-# Inspect connection
-config supabase status
-
-# Wipe browser-stored credentials
-config supabase clear
-```
+#### Administrative Security & Content Protection
+Database credentials and endpoints are masked from public terminal viewers:
+- **Direct Table Access Revoked**: Row Level Security (RLS) is enabled and all direct table reads (`SELECT * FROM users/tasks`) or mutations by anonymous roles are completely blocked.
+- **Server-Side Credential Verification**: All operations execute via PostgreSQL `SECURITY DEFINER` stored procedures (`todocli_authenticate`, `todocli_list_tasks`, etc.) that strictly verify user credentials before touching or returning any data.
+- **Admin Access Only**: Administrative access is restricted to authorized owners through Vercel environment variables or the Supabase project dashboard.
+- **Terminal Masking**: Sensitive keys and database URLs are never outputted or exposed in the terminal interface.
 
 ---
 

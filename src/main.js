@@ -31,7 +31,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'config', 'supabase', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
 ]);
 
 /**
@@ -147,8 +147,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami', 'config supabase ']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'config supabase '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -159,13 +159,13 @@ function handleAutocomplete() {
 
 function getHelpText() {
   return [
-    'todocli Commands (Cloud-Synced via Supabase):',
-    '  <username> <password> create                   - Register a new account in Supabase',
-    '  <username> <password> login                    - Log in & store session offline in browser',
-    '  <username> <password> logout                   - Log out & clear browser session',
-    '  <username> <password> list / ls                - List all tasks from Supabase',
-    '  <username> <password> add task <task_name>     - Add task to Supabase',
-    '  <username> <password> delete task <task_numbers>- Delete tasks from Supabase (e.g. 1 or 1,2,5)',
+    'todocli Commands:',
+    '  <username> <password> create                   - Register a new account',
+    '  <username> <password> login                    - Log in and save session in browser',
+    '  <username> <password> logout                   - Log out and clear session',
+    '  <username> <password> list / ls                - List all tasks',
+    '  <username> <password> add task <task_name>     - Add a new task',
+    '  <username> <password> delete task <task_numbers>- Delete tasks by number (e.g. 1 or 1,2,5)',
     '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
     '',
     'When Logged In (Shortcut Commands):',
@@ -176,10 +176,7 @@ function getHelpText() {
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
     '',
-    'Configuration & Utilities:',
-    '  config supabase <url> <anon_key>               - Set Supabase credentials',
-    '  config supabase status                         - View Supabase connection status',
-    '  config supabase clear                          - Clear stored browser Supabase credentials',
+    'Utilities:',
     '  clear / cls                                    - Clear terminal screen',
     '  help                                           - Display this manual'
   ].join('\n');
@@ -189,7 +186,8 @@ async function executeCommand() {
   const raw = cliInput.value.trim();
   if (!raw) return;
 
-  commandHistory.push(raw);
+  // Mask credentials before persisting to command history to prevent local credential exposure
+  commandHistory.push(maskCommand(raw));
   if (commandHistory.length > 100) commandHistory.shift();
   localStorage.setItem('todocli_history', JSON.stringify(commandHistory));
   historyIndex = -1;
@@ -222,8 +220,8 @@ async function executeCommand() {
     return;
   }
 
-  // Handle Supabase configuration commands
-  if (lower.startsWith('config supabase') || lower === 'supabase status') {
+  // Handle configuration commands with credential masking
+  if (lower.startsWith('config supabase') || lower === 'supabase status' || lower === 'config status') {
     handleSupabaseConfigCommand(raw, activePrompt);
     return;
   }
@@ -250,14 +248,12 @@ async function executeCommand() {
     commandToRun = `${session.username} ${session.password} ${raw}`;
   }
 
-  // Check if Supabase is configured before attempting database operations
+  // Check if database service is configured before attempting operations
   if (!isSupabaseConfigured()) {
     appendHistory(
       raw,
-      'Error: Supabase is not configured.\n' +
-      'Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file, OR\n' +
-      'Run in terminal: config supabase <SUPABASE_URL> <SUPABASE_ANON_KEY>\n' +
-      'See supabase/schema.sql for the database setup script.',
+      'Error: Database service is not configured.\n' +
+      'Please configure environment variables in your deployment dashboard (e.g. Vercel) or contact administrator.',
       'error',
       activePrompt
     );
@@ -270,23 +266,25 @@ async function executeCommand() {
 function handleSupabaseConfigCommand(raw, activePrompt) {
   const parts = raw.split(/\s+/);
 
-  // If "supabase status" or "config supabase" or "config supabase status"
+  // Status check: never disclose raw endpoint URL or keys
   if (parts.length === 2 || (parts.length === 3 && parts[2].toLowerCase() === 'status')) {
     const config = getSupabaseConfig();
     if (config.url && config.key) {
-      const maskedKey = config.key.length > 12 
-        ? `${config.key.substring(0, 8)}...${config.key.substring(config.key.length - 4)}` 
-        : '***';
       appendHistory(
         raw,
-        `Supabase Configuration:\n  Status: Connected\n  URL: ${config.url}\n  Anon Key: ${maskedKey}\n  Source: ${config.source}`,
+        'Database Configuration:\n' +
+        '  Status: Connected (Protected)\n' +
+        '  Access Control: Active (Row-Level Security & Credential Isolation)\n' +
+        '  Admin Access: Managed via Vercel / Supabase Settings',
         'success',
         activePrompt
       );
     } else {
       appendHistory(
         raw,
-        'Supabase Configuration:\n  Status: Not configured\n  Usage: config supabase <URL> <ANON_KEY>',
+        'Database Configuration:\n' +
+        '  Status: Not configured\n' +
+        '  Notice: Administrative deployment credentials (Vercel) required.',
         'error',
         activePrompt
       );
@@ -294,35 +292,60 @@ function handleSupabaseConfigCommand(raw, activePrompt) {
     return;
   }
 
-  // "config supabase clear"
+  // Clear credentials
   if (parts.length === 3 && parts[2].toLowerCase() === 'clear') {
-    clearSupabaseConfig();
-    appendHistory(raw, 'Browser-stored Supabase credentials cleared.', 'success', activePrompt);
+    const config = getSupabaseConfig();
+    if (config.source === 'env') {
+      appendHistory(
+        raw,
+        'Notice: Administrative environment credentials (Vercel) cannot be cleared by client session.',
+        'error',
+        activePrompt
+      );
+    } else {
+      clearSupabaseConfig();
+      appendHistory(raw, 'Browser-stored database configuration cleared.', 'success', activePrompt);
+    }
     return;
   }
 
-  // "config supabase <url> <key>"
+  // Manual configuration attempt
   if (parts.length >= 4) {
+    const config = getSupabaseConfig();
+    if (config.source === 'env') {
+      appendHistory(
+        raw,
+        'Notice: Database configuration is securely managed by administrative environment settings (Vercel). Manual terminal overrides are disabled.',
+        'error',
+        activePrompt
+      );
+      return;
+    }
     const url = parts[2];
     const key = parts[3];
     try {
       new URL(url);
     } catch (e) {
-      appendHistory(raw, `Error: '${url}' is not a valid URL. Example: https://xyz.supabase.co`, 'error', activePrompt);
+      appendHistory(raw, `Error: '${url}' is not a valid URL.`, 'error', activePrompt);
       return;
     }
 
     setSupabaseConfig(url, key);
     appendHistory(
       raw,
-      `Supabase configured successfully!\nConnected to: ${url}\nStored in browser configuration.`,
+      'Database connection configured successfully! Status: Protected.',
       'success',
       activePrompt
     );
     return;
   }
 
-  appendHistory(raw, 'Usage: config supabase <URL> <ANON_KEY>\nOr: config supabase status\nOr: config supabase clear', 'error', activePrompt);
+  appendHistory(
+    raw,
+    'Database Configuration:\n  Status: Protected\n  Admin access managed via Vercel or Supabase.',
+    'error',
+    activePrompt
+  );
 }
 
 /**

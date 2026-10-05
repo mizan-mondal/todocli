@@ -1,5 +1,5 @@
 -- =============================================================================
--- todocli Supabase Database Schema
+-- todocli Supabase Database Schema (Protected & Credential-Masked)
 -- Run this script in your Supabase Project -> SQL Editor -> New Query -> Run
 -- =============================================================================
 
@@ -29,27 +29,350 @@ CREATE INDEX IF NOT EXISTS idx_tasks_username_position ON tasks(username, positi
 CREATE INDEX IF NOT EXISTS idx_tasks_username_id ON tasks(username, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
--- 4. Enable Row Level Security (RLS)
+-- =============================================================================
+-- 4. Enable Row Level Security (RLS) & Revoke Insecure Direct Access
+-- =============================================================================
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 
--- 5. Access Policies (Permit public anon client operations for todocli CLI)
--- Users policies
+-- Drop all old permissive policies (prevents any unauthorized user or anon key
+-- from reading or touching database contents directly via REST API or DevTools)
 DROP POLICY IF EXISTS "Allow public select users" ON users;
-CREATE POLICY "Allow public select users" ON users FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow public insert users" ON users;
-CREATE POLICY "Allow public insert users" ON users FOR INSERT WITH CHECK (true);
-
--- Tasks policies
 DROP POLICY IF EXISTS "Allow public select tasks" ON tasks;
-CREATE POLICY "Allow public select tasks" ON tasks FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow public insert tasks" ON tasks;
-CREATE POLICY "Allow public insert tasks" ON tasks FOR INSERT WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow public delete tasks" ON tasks;
-CREATE POLICY "Allow public delete tasks" ON tasks FOR DELETE USING (true);
-
 DROP POLICY IF EXISTS "Allow public update tasks" ON tasks;
-CREATE POLICY "Allow public update tasks" ON tasks FOR UPDATE USING (true);
+
+-- Revoke direct table manipulation permissions from anon & authenticated roles.
+-- Direct table queries (SELECT * FROM users / tasks) are completely blocked.
+-- Only Admin access (via Supabase Dashboard SQL/Table Editor or Service Role Key in Vercel)
+-- can directly view or touch database contents.
+REVOKE ALL ON users FROM anon, authenticated;
+REVOKE ALL ON tasks FROM anon, authenticated;
+
+-- =============================================================================
+-- 5. Secure Stored Procedures (SECURITY DEFINER)
+-- Credential verification and user isolation enforced server-side in PostgreSQL.
+-- No user can touch or view data without valid username and password credentials.
+-- =============================================================================
+
+-- 5.1 Retrieve Salt for a Given Username (Returns ONLY the salt, never hashes)
+CREATE OR REPLACE FUNCTION todocli_get_salt(p_username TEXT)
+RETURNS TABLE (salt TEXT)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT u.password_salt
+    FROM users u
+    WHERE u.username = trim(p_username);
+END;
+$$;
+
+-- 5.2 Secure User Creation
+CREATE OR REPLACE FUNCTION todocli_create_user(
+    p_username TEXT,
+    p_password_hash TEXT,
+    p_password_salt TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_clean_username TEXT;
+BEGIN
+    v_clean_username := trim(p_username);
+
+    IF v_clean_username IS NULL OR v_clean_username = '' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Username cannot be blank.');
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM users WHERE username = v_clean_username) THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: User ''' || v_clean_username || ''' already exists.');
+    END IF;
+
+    INSERT INTO users (username, password_hash, password_salt)
+    VALUES (v_clean_username, p_password_hash, p_password_salt);
+
+    RETURN jsonb_build_object('success', true, 'message', 'User ''' || v_clean_username || ''' created successfully.');
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Database error: ' || SQLERRM);
+END;
+$$;
+
+-- 5.3 Secure User Authentication (Verifies password hash server-side)
+CREATE OR REPLACE FUNCTION todocli_authenticate(
+    p_username TEXT,
+    p_password_hash TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) THEN
+        RETURN jsonb_build_object('success', true, 'message', 'Authenticated successfully.');
+    ELSE
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+END;
+$$;
+
+-- 5.4 List Tasks (Requires valid credentials; returns ONLY tasks belonging to user)
+CREATE OR REPLACE FUNCTION todocli_list_tasks(
+    p_username TEXT,
+    p_password_hash TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_auth BOOLEAN;
+    v_tasks JSONB;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) INTO v_auth;
+
+    IF NOT v_auth THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', t.id,
+            'task_name', t.task_name,
+            'position', t.position,
+            'created_at', t.created_at
+        ) ORDER BY t.position ASC, t.id ASC
+    ), '[]'::jsonb)
+    INTO v_tasks
+    FROM tasks t
+    WHERE t.username = trim(p_username);
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'tasks', v_tasks
+    );
+END;
+$$;
+
+-- 5.5 Add Task (Requires valid credentials; adds task for authenticated user only)
+CREATE OR REPLACE FUNCTION todocli_add_task(
+    p_username TEXT,
+    p_password_hash TEXT,
+    p_task_name TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_auth BOOLEAN;
+    v_next_pos INT;
+    v_clean_task TEXT;
+BEGIN
+    v_clean_task := trim(p_task_name);
+    IF v_clean_task IS NULL OR v_clean_task = '' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Task description cannot be empty.');
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) INTO v_auth;
+
+    IF NOT v_auth THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+
+    SELECT COALESCE(MAX(position), 0) + 1 INTO v_next_pos
+    FROM tasks
+    WHERE username = trim(p_username);
+
+    INSERT INTO tasks (username, task_name, position)
+    VALUES (trim(p_username), v_clean_task, v_next_pos);
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Task added: "' || v_clean_task || '"'
+    );
+END;
+$$;
+
+-- 5.6 Delete Tasks (Requires valid credentials; deletes only tasks of authenticated user)
+CREATE OR REPLACE FUNCTION todocli_delete_tasks(
+    p_username TEXT,
+    p_password_hash TEXT,
+    p_task_numbers INT[]
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_auth BOOLEAN;
+    v_total INT;
+    v_num INT;
+    v_task RECORD;
+    v_deleted_messages TEXT[] := ARRAY[]::TEXT[];
+    v_target_ids BIGINT[] := ARRAY[]::BIGINT[];
+    v_idx INT;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) INTO v_auth;
+
+    IF NOT v_auth THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+
+    SELECT COUNT(*) INTO v_total FROM tasks WHERE username = trim(p_username);
+    IF v_total = 0 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Task not found. No tasks exist for user ''' || trim(p_username) || '''.');
+    END IF;
+
+    FOREACH v_num IN ARRAY p_task_numbers
+    LOOP
+        IF v_num < 1 OR v_num > v_total THEN
+            RETURN jsonb_build_object('success', false, 'message', 'Error: Task #' || v_num || ' not found. Use ''list'' to view current tasks.');
+        END IF;
+    END LOOP;
+
+    v_idx := 1;
+    FOR v_task IN (
+        SELECT id, task_name FROM tasks 
+        WHERE username = trim(p_username) 
+        ORDER BY position ASC, id ASC
+    ) LOOP
+        IF v_idx = ANY(p_task_numbers) THEN
+            v_target_ids := array_append(v_target_ids, v_task.id);
+            v_deleted_messages := array_append(v_deleted_messages, 'Task #' || v_idx || ' deleted: "' || v_task.task_name || '"');
+        END IF;
+        v_idx := v_idx + 1;
+    END LOOP;
+
+    DELETE FROM tasks WHERE id = ANY(v_target_ids) AND username = trim(p_username);
+
+    -- Re-sequence position column for remaining tasks
+    v_idx := 1;
+    FOR v_task IN (
+        SELECT id FROM tasks 
+        WHERE username = trim(p_username) 
+        ORDER BY position ASC, id ASC
+    ) LOOP
+        UPDATE tasks SET position = v_idx WHERE id = v_task.id;
+        v_idx := v_idx + 1;
+    END LOOP;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', array_to_string(v_deleted_messages, E'\n')
+    );
+END;
+$$;
+
+-- 5.7 Priority Task Reordering (Requires valid credentials)
+CREATE OR REPLACE FUNCTION todocli_priority_task(
+    p_username TEXT,
+    p_password_hash TEXT,
+    p_from INT,
+    p_to INT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_auth BOOLEAN;
+    v_total INT;
+    v_task RECORD;
+    v_task_ids BIGINT[] := ARRAY[]::BIGINT[];
+    v_moved_id BIGINT;
+    v_moved_name TEXT;
+    v_new_order BIGINT[] := ARRAY[]::BIGINT[];
+    v_i INT;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) INTO v_auth;
+
+    IF NOT v_auth THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+
+    SELECT COUNT(*) INTO v_total FROM tasks WHERE username = trim(p_username);
+    IF v_total = 0 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'No tasks found for user ''' || trim(p_username) || '''.');
+    END IF;
+
+    IF p_from < 1 OR p_from > v_total THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Source task #' || p_from || ' not found. Valid range is 1 to ' || v_total || '.');
+    END IF;
+
+    IF p_to < 1 OR p_to > v_total THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Target position #' || p_to || ' is out of bounds. Valid range is 1 to ' || v_total || '.');
+    END IF;
+
+    FOR v_task IN (
+        SELECT id, task_name FROM tasks 
+        WHERE username = trim(p_username) 
+        ORDER BY position ASC, id ASC
+    ) LOOP
+        v_task_ids := array_append(v_task_ids, v_task.id);
+    END LOOP;
+
+    v_moved_id := v_task_ids[p_from];
+    SELECT task_name INTO v_moved_name FROM tasks WHERE id = v_moved_id;
+
+    v_new_order := ARRAY[]::BIGINT[];
+    FOR v_i IN 1..v_total LOOP
+        IF v_i = p_to AND p_from > p_to THEN
+            v_new_order := array_append(v_new_order, v_moved_id);
+        END IF;
+        IF v_i <> p_from THEN
+            v_new_order := array_append(v_new_order, v_task_ids[v_i]);
+        END IF;
+        IF v_i = p_to AND p_from < p_to THEN
+            v_new_order := array_append(v_new_order, v_moved_id);
+        END IF;
+    END LOOP;
+
+    FOR v_i IN 1..array_length(v_new_order, 1) LOOP
+        UPDATE tasks SET position = v_i WHERE id = v_new_order[v_i] AND username = trim(p_username);
+    END LOOP;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Task #' || p_from || ' moved to position #' || p_to || ': "' || v_moved_name || '"'
+    );
+END;
+$$;
+
+-- =============================================================================
+-- 6. Permissions Grant (Allows client access ONLY through secure RPC functions)
+-- =============================================================================
+GRANT EXECUTE ON FUNCTION todocli_get_salt(TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_create_user(TEXT, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_authenticate(TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_list_tasks(TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_add_task(TEXT, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_delete_tasks(TEXT, TEXT, INT[]) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION todocli_priority_task(TEXT, TEXT, INT, INT) TO anon, authenticated;
