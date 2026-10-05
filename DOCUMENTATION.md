@@ -229,21 +229,27 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_username_id ON tasks(username, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
--- 4. Row Level Security (RLS)
+-- 4. Server-Side Rate Limiting Table
+CREATE TABLE IF NOT EXISTS todocli_rate_limits (
+    identifier TEXT PRIMARY KEY,
+    failed_attempts INT DEFAULT 0,
+    last_attempt TIMESTAMPTZ DEFAULT NOW(),
+    locked_until TIMESTAMPTZ
+);
+
+-- 5. Row Level Security (RLS) & Revoke Direct Table Access
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE todocli_rate_limits ENABLE ROW LEVEL SECURITY;
 
--- 5. Open Anonymous Client Access Policies
-CREATE POLICY "Allow public select users" ON users FOR SELECT USING (true);
-CREATE POLICY "Allow public insert users" ON users FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public select tasks" ON tasks FOR SELECT USING (true);
-CREATE POLICY "Allow public insert tasks" ON tasks FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public delete tasks" ON tasks FOR DELETE USING (true);
-CREATE POLICY "Allow public update tasks" ON tasks FOR UPDATE USING (true);
+-- Block direct table queries; access permitted ONLY via SECURITY DEFINER stored procedures:
+REVOKE ALL ON users FROM anon, authenticated;
+REVOKE ALL ON tasks FROM anon, authenticated;
+REVOKE ALL ON todocli_rate_limits FROM anon, authenticated;
 ```
 
 > [!NOTE]
-> The compound index `idx_tasks_username_id ON tasks(username, id ASC)` is critical. It guarantees that task queries for a specific user are returned in consistent ascending ID order with $O(\log N)$ index seek performance, ensuring stable 1-based serial numbering.
+> Direct table access is completely revoked for anonymous and authenticated clients. All interactions are strictly governed by PostgreSQL `SECURITY DEFINER` stored procedures (`todocli_authenticate`, `todocli_create_user`, `todocli_list_tasks`, etc.) that verify salted password hashes server-side and enforce rate limiting.
 
 ---
 
@@ -307,18 +313,20 @@ sequenceDiagram
     actor User as User / Terminal
     participant FE as Frontend Client
     participant Crypto as Web Crypto API (SubtleCrypto)
-    participant DB as Supabase PostgreSQL
+    participant DB as Supabase PostgreSQL (RPC)
 
     User->>FE: Input: "mizan mypassword login"
-    FE->>DB: Query user record by username ('mizan')
-    DB-->>FE: Return { username, password_hash, password_salt }
-    FE->>Crypto: Compute SHA-256("mypassword:" + user.password_salt)
+    FE->>DB: rpc('todocli_get_salt', { p_username: 'mizan' })
+    DB-->>FE: Return salt only (password hash is never exposed to client)
+    FE->>Crypto: Compute SHA-256("mypassword:" + salt)
     Crypto-->>FE: Computed Hex Hash
-    alt Computed Hash === user.password_hash
+    FE->>DB: rpc('todocli_authenticate', { p_username: 'mizan', p_password_hash: hash })
+    DB-->>FE: Return { success: true/false, message: "..." }
+    alt Authentication Succeeded
         FE->>FE: Save session in localStorage ('todocli_session')
         FE->>User: "User 'mizan' logged in successfully." (Prompt becomes mizan:~$)
-    else Mismatch or User Missing
-        FE->>User: "Authentication failed: Invalid username or password."
+    else Authentication Failed or Rate Limited
+        FE->>User: Error message (including remaining lockout seconds if throttled)
     end
 ```
 
@@ -383,6 +391,39 @@ public final class PasswordUtil {
         return MessageDigest.isEqual(a, b);
     }
 }
+```
+
+---
+
+### 5.3 Multi-Tier Rate Limiting & Denial-of-Service Defense Architecture
+
+To protect both user accounts from automated credential stuffing/brute-force guessing and the infrastructure from denial-of-service flood conditions, `todocli` implements a synchronized multi-tier rate limiting architecture across all layers of the stack:
+
+| Layer | Component | Mechanism | Threshold / Penalty |
+|---|---|---|---|
+| **Client Frontend** | `src/supabase.js` / `cli-frontend/script.js` | Sliding-window timestamp queue (`requestTimestamps`) | Max 20 requests per 10-second window. Returns immediate `429`-style terminal warning. |
+| **Client Auth Tracker** | `checkAuthRateLimit` / `recordFailedAuth` | In-memory failed attempt map keyed by lowercase username | 5 failed attempts in 60s locks user for 30s before issuing network requests. |
+| **PostgreSQL Cloud DB** | `todocli_rate_limits` table & `todocli_authenticate` RPC | Server-side transactional row lock and timestamp comparison | Enforces 30-second lockout after 5 consecutive failures. Immune to client-side bypass. |
+| **PostgreSQL Registration** | `todocli_create_user` RPC | Sliding-window `INTERVAL '60 seconds'` aggregation | Max 10 account creations globally per minute. Blocks automated registration bots. |
+| **Spring Boot Backend** | `CommandController.java` (`authFailureMap`) | `ConcurrentHashMap` with atomic `compute()` state machine | 5 failed attempts in 60s locks user for 30s. |
+| **Spring Boot Registration** | `CommandController.java` (`registrationTimestamps`) | `ConcurrentLinkedQueue` sliding-window eviction | Max 10 account creations per 60 seconds. |
+
+```mermaid
+graph TD
+    A[User Enters Command] --> B{Exceeds Request Limit?<br/>20 req / 10s}
+    B -- Yes --> C[Return Error: Rate limit exceeded]
+    B -- No --> D{Operation Type}
+    D -- "create" --> E{Registration Flood?<br/>> 10 users / 60s}
+    E -- Yes --> F[Return Error: Too many accounts created]
+    E -- No --> G[Create User & Salt/Hash Password]
+    D -- "auth/login/cmd" --> H{Account Locked?<br/>locked_until > now}
+    H -- Yes --> I[Return Error: Account locked for X seconds]
+    H -- No --> J{Valid Password Hash?}
+    J -- No --> K[Record Failed Attempt<br/>Increment Failure Count]
+    K --> L{Failures >= 5?}
+    L -- Yes --> M[Lock Account for 30 Seconds]
+    L -- No --> N[Return: Authentication failed]
+    J -- Yes --> O[Clear Failure Record & Execute Command]
 ```
 
 ---

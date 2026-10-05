@@ -121,5 +121,9 @@ This builds into `dist/` and runs a local preview server on `http://localhost:41
 
 ### 🔒 Production Security Checklist
 - [x] **Never commit your `.env` file**: `.env` is already added to `.gitignore`. Always configure production secrets in your hosting platform's environment settings.
-- [x] **Row Level Security (RLS)**: Ensure you have executed `supabase/schema.sql` in your Supabase dashboard so tables are protected by RLS policies.
+- [x] **Row Level Security (RLS) & Stored Procedures**: Ensure you have executed `supabase/schema.sql` in your Supabase dashboard so tables are protected by RLS policies and mutations go through `SECURITY DEFINER` functions.
 - [x] **Client-Side Secret Safety**: Only the Supabase `anon` public key is bundled in the frontend. Never expose your Supabase `service_role` secret key.
+- [x] **Multi-Tier Rate Limiting**:
+  - **Authentication Lockout**: 5 failed login attempts in 60s locks out the account for 30s across client, backend, and PostgreSQL database.
+  - **Registration Flood Protection**: Rejects more than 10 new user accounts per 60-second window.
+  - **Request Throttling**: Limits clients to a maximum of 20 database requests per 10-second sliding window.

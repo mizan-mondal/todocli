@@ -361,6 +361,89 @@ function handleSupabaseConfigCommand(raw, activePrompt) {
 // Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
 const saltCache = new Map();
 
+// =============================================================================
+// Rate Limiting (Brute-Force & Abuse Protection)
+// =============================================================================
+
+const AUTH_RATE_LIMIT = {
+  MAX_FAILED_ATTEMPTS: 5,
+  WINDOW_MS: 60 * 1000,
+  LOCKOUT_MS: 30 * 1000
+};
+
+const REQUEST_RATE_LIMIT = {
+  MAX_REQUESTS: 20,
+  WINDOW_MS: 10 * 1000
+};
+
+const authFailures = new Map();
+const requestTimestamps = [];
+
+function checkRequestRateLimit() {
+  const now = Date.now();
+  while (requestTimestamps.length > 0 && requestTimestamps[0] <= now - REQUEST_RATE_LIMIT.WINDOW_MS) {
+    requestTimestamps.shift();
+  }
+
+  if (requestTimestamps.length >= REQUEST_RATE_LIMIT.MAX_REQUESTS) {
+    const oldest = requestTimestamps[0];
+    const waitSec = Math.max(1, Math.ceil((oldest + REQUEST_RATE_LIMIT.WINDOW_MS - now) / 1000));
+    return {
+      allowed: false,
+      message: `Error: Rate limit exceeded. Too many requests. Please wait ${waitSec}s before trying again.`
+    };
+  }
+
+  requestTimestamps.push(now);
+  return { allowed: true };
+}
+
+function checkAuthRateLimit(username) {
+  const cleanUser = username.trim().toLowerCase();
+  const record = authFailures.get(cleanUser);
+  if (!record) return { allowed: true };
+
+  const now = Date.now();
+
+  if (record.lockedUntil && record.lockedUntil > now) {
+    const waitSec = Math.ceil((record.lockedUntil - now) / 1000);
+    return {
+      allowed: false,
+      message: `Error: Rate limit exceeded for user '${username}'. Too many failed attempts. Try again in ${waitSec}s.`
+    };
+  }
+
+  if (record.firstAttempt <= now - AUTH_RATE_LIMIT.WINDOW_MS) {
+    authFailures.delete(cleanUser);
+    return { allowed: true };
+  }
+
+  return { allowed: true };
+}
+
+function recordFailedAuth(username) {
+  const cleanUser = username.trim().toLowerCase();
+  const now = Date.now();
+  let record = authFailures.get(cleanUser);
+
+  if (!record || record.firstAttempt <= now - AUTH_RATE_LIMIT.WINDOW_MS) {
+    record = { count: 1, firstAttempt: now, lockedUntil: null };
+  } else {
+    record.count += 1;
+  }
+
+  if (record.count >= AUTH_RATE_LIMIT.MAX_FAILED_ATTEMPTS) {
+    record.lockedUntil = now + AUTH_RATE_LIMIT.LOCKOUT_MS;
+  }
+
+  authFailures.set(cleanUser, record);
+}
+
+function resetAuthRateLimit(username) {
+  const cleanUser = username.trim().toLowerCase();
+  authFailures.delete(cleanUser);
+}
+
 function generateHexSalt() {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -403,6 +486,9 @@ async function fetchFrontendUserTasksLegacy(supabase, username) {
 }
 
 async function dbCreateUser(username, password) {
+  const reqCheck = checkRequestRateLimit();
+  if (!reqCheck.allowed) return { success: false, message: reqCheck.message };
+
   const supabase = getSupabase();
   if (!supabase) throw new Error('Database service is not configured.');
 
@@ -442,10 +528,20 @@ async function dbCreateUser(username, password) {
 }
 
 async function dbAuthenticateUser(username, password) {
+  const cleanUser = username.trim();
+
+  const authLimitCheck = checkAuthRateLimit(cleanUser);
+  if (!authLimitCheck.allowed) {
+    return { success: false, message: authLimitCheck.message };
+  }
+
+  const reqCheck = checkRequestRateLimit();
+  if (!reqCheck.allowed) {
+    return { success: false, message: reqCheck.message };
+  }
+
   const supabase = getSupabase();
   if (!supabase) throw new Error('Database service is not configured.');
-
-  const cleanUser = username.trim();
 
   try {
     let salt = saltCache.get(cleanUser);
@@ -465,8 +561,12 @@ async function dbAuthenticateUser(username, password) {
       });
       if (!authErr && authData) {
         if (authData.success) {
+          resetAuthRateLimit(cleanUser);
           return { success: true, user: { username: cleanUser, password_hash: hash, password_salt: salt } };
         } else {
+          recordFailedAuth(cleanUser);
+          const postLockout = checkAuthRateLimit(cleanUser);
+          if (!postLockout.allowed) return { success: false, message: postLockout.message };
           return { success: false, message: authData.message || 'Authentication failed: Invalid username or password.' };
         }
       }
@@ -481,13 +581,22 @@ async function dbAuthenticateUser(username, password) {
     .maybeSingle();
 
   if (error) throw new Error(`Database error during authentication: ${error.message}`);
-  if (!user) return { success: false, message: 'Authentication failed: Invalid username or password.' };
-
-  const computedHash = await hashPassword(password, user.password_salt);
-  if (computedHash !== user.password_hash) {
+  if (!user) {
+    recordFailedAuth(cleanUser);
+    const postLockout = checkAuthRateLimit(cleanUser);
+    if (!postLockout.allowed) return { success: false, message: postLockout.message };
     return { success: false, message: 'Authentication failed: Invalid username or password.' };
   }
 
+  const computedHash = await hashPassword(password, user.password_salt);
+  if (computedHash !== user.password_hash) {
+    recordFailedAuth(cleanUser);
+    const postLockout = checkAuthRateLimit(cleanUser);
+    if (!postLockout.allowed) return { success: false, message: postLockout.message };
+    return { success: false, message: 'Authentication failed: Invalid username or password.' };
+  }
+
+  resetAuthRateLimit(cleanUser);
   saltCache.set(cleanUser, user.password_salt);
   return { success: true, user };
 }

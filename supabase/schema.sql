@@ -35,6 +35,17 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 
+-- 4.1 Server-Side Rate Limiting Table (Brute-Force & Abuse Mitigation)
+CREATE TABLE IF NOT EXISTS todocli_rate_limits (
+    identifier TEXT PRIMARY KEY,
+    failed_attempts INT DEFAULT 0,
+    last_attempt TIMESTAMPTZ DEFAULT NOW(),
+    locked_until TIMESTAMPTZ
+);
+
+ALTER TABLE todocli_rate_limits ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON todocli_rate_limits FROM anon, authenticated;
+
 -- Drop all old permissive policies (prevents any unauthorized user or anon key
 -- from reading or touching database contents directly via REST API or DevTools)
 DROP POLICY IF EXISTS "Allow public select users" ON users;
@@ -72,7 +83,7 @@ BEGIN
 END;
 $$;
 
--- 5.2 Secure User Creation
+-- 5.2 Secure User Creation (With Abuse & Spam Prevention)
 CREATE OR REPLACE FUNCTION todocli_create_user(
     p_username TEXT,
     p_password_hash TEXT,
@@ -85,11 +96,21 @@ SET search_path = public
 AS $$
 DECLARE
     v_clean_username TEXT;
+    v_recent_creations INT;
 BEGIN
     v_clean_username := trim(p_username);
 
     IF v_clean_username IS NULL OR v_clean_username = '' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Error: Username cannot be blank.');
+    END IF;
+
+    -- Rate limiting check: Maximum 10 account registrations per minute
+    SELECT COUNT(*) INTO v_recent_creations 
+    FROM users 
+    WHERE created_at > NOW() - INTERVAL '60 seconds';
+
+    IF v_recent_creations >= 10 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Rate limit exceeded. Too many new accounts registered recently. Please wait a minute.');
     END IF;
 
     IF EXISTS (SELECT 1 FROM users WHERE username = v_clean_username) THEN
@@ -105,7 +126,7 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
--- 5.3 Secure User Authentication (Verifies password hash server-side)
+-- 5.3 Secure User Authentication (With Server-Side Brute-Force Rate Limiting)
 CREATE OR REPLACE FUNCTION todocli_authenticate(
     p_username TEXT,
     p_password_hash TEXT
@@ -115,13 +136,60 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+    v_clean_user TEXT;
+    v_now TIMESTAMPTZ := NOW();
+    v_wait_sec INT;
+    v_record RECORD;
 BEGIN
+    v_clean_user := lower(trim(p_username));
+
+    -- Check rate limit lockout (Max 5 failed attempts -> 30s lockout)
+    SELECT * INTO v_record FROM todocli_rate_limits WHERE identifier = v_clean_user;
+    IF v_record.locked_until IS NOT NULL AND v_record.locked_until > v_now THEN
+        v_wait_sec := CEIL(EXTRACT(EPOCH FROM (v_record.locked_until - v_now)))::INT;
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Error: Rate limit exceeded for user ''' || p_username || '''. Too many failed attempts. Try again in ' || v_wait_sec || ' seconds.'
+        );
+    END IF;
+
+    -- Verify credentials
     IF EXISTS (
         SELECT 1 FROM users 
         WHERE username = trim(p_username) AND password_hash = p_password_hash
     ) THEN
+        -- Clear failed attempts on successful authentication
+        IF v_record.identifier IS NOT NULL THEN
+            DELETE FROM todocli_rate_limits WHERE identifier = v_clean_user;
+        END IF;
         RETURN jsonb_build_object('success', true, 'message', 'Authenticated successfully.');
     ELSE
+        -- Record failure & apply rate limit penalty
+        IF v_record.identifier IS NULL OR v_record.last_attempt < v_now - INTERVAL '60 seconds' THEN
+            INSERT INTO todocli_rate_limits (identifier, failed_attempts, last_attempt, locked_until)
+            VALUES (v_clean_user, 1, v_now, NULL)
+            ON CONFLICT (identifier) DO UPDATE
+            SET failed_attempts = 1, last_attempt = v_now, locked_until = NULL;
+        ELSE
+            IF v_record.failed_attempts + 1 >= 5 THEN
+                UPDATE todocli_rate_limits
+                SET failed_attempts = v_record.failed_attempts + 1,
+                    last_attempt = v_now,
+                    locked_until = v_now + INTERVAL '30 seconds'
+                WHERE identifier = v_clean_user;
+                RETURN jsonb_build_object(
+                    'success', false,
+                    'message', 'Error: Rate limit exceeded. 5 failed login attempts. User ''' || p_username || ''' locked for 30 seconds.'
+                );
+            ELSE
+                UPDATE todocli_rate_limits
+                SET failed_attempts = v_record.failed_attempts + 1,
+                    last_attempt = v_now
+                WHERE identifier = v_clean_user;
+            END IF;
+        END IF;
+
         RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
     END IF;
 END;

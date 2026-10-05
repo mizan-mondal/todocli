@@ -1,5 +1,6 @@
 com\example\cli\util\PasswordUtil.class
 com\example\cli\CliApplication.class
+com\example\cli\controller\CommandController$AuthFailureRecord.class
 com\example\cli\model\User.class
 com\example\cli\controller\CommandController$CommandRequest.class
 com\example\cli\controller\CommandController.class

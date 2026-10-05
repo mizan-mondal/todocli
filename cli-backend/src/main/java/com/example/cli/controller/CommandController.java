@@ -19,6 +19,26 @@ public class CommandController {
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
 
+    private static class AuthFailureRecord {
+        int count;
+        long firstAttemptTime;
+        long lockedUntil;
+
+        AuthFailureRecord(long firstAttemptTime) {
+            this.count = 1;
+            this.firstAttemptTime = firstAttemptTime;
+            this.lockedUntil = 0;
+        }
+    }
+
+    private final Map<String, AuthFailureRecord> authFailureMap = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentLinkedQueue<Long> registrationTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    public void resetRateLimits() {
+        authFailureMap.clear();
+        registrationTimestamps.clear();
+    }
+
     public CommandController(TaskRepository taskRepository, UserRepository userRepository) {
         this.taskRepository = taskRepository;
         this.userRepository = userRepository;
@@ -138,6 +158,13 @@ public class CommandController {
 
         // Account Creation: <username> <password> create
         if (operation.equals("create")) {
+            long nowReg = System.currentTimeMillis();
+            registrationTimestamps.removeIf(ts -> ts < nowReg - 60_000);
+            if (registrationTimestamps.size() >= 10) {
+                return ResponseEntity.ok(new CommandResponse(false,
+                        "Error: Rate limit exceeded. Too many new accounts registered recently. Please wait a minute.", null));
+            }
+
             if (userRepository.findByUsername(username).isPresent()) {
                 return ResponseEntity.ok(new CommandResponse(false,
                         "Error: User '" + username + "' already exists.", null));
@@ -147,17 +174,49 @@ public class CommandController {
             String hash = PasswordUtil.hashPassword(password, salt);
             User newUser = new User(username, hash, salt);
             userRepository.save(newUser);
+            registrationTimestamps.add(nowReg);
 
             return ResponseEntity.ok(new CommandResponse(true,
                     "User '" + username + "' created successfully.", null));
         }
 
+        // Check authentication rate limit (brute-force prevention)
+        long now = System.currentTimeMillis();
+        String lowerUser = username.toLowerCase();
+        AuthFailureRecord record = authFailureMap.get(lowerUser);
+        if (record != null && record.lockedUntil > now) {
+            long waitSec = (record.lockedUntil - now + 999) / 1000;
+            return ResponseEntity.ok(new CommandResponse(false,
+                    "Error: Rate limit exceeded for user '" + username + "'. Too many failed attempts. Try again in " + waitSec + " seconds.", null));
+        }
+
         // For all other operations, authenticate user credentials
         Optional<User> userOpt = userRepository.findByUsername(username);
         if (userOpt.isEmpty() || !PasswordUtil.verifyPassword(password, userOpt.get().getPasswordSalt(), userOpt.get().getPasswordHash())) {
+            authFailureMap.compute(lowerUser, (k, v) -> {
+                if (v == null || (now - v.firstAttemptTime) > 60_000) {
+                    return new AuthFailureRecord(now);
+                } else {
+                    v.count++;
+                    if (v.count >= 5) {
+                        v.lockedUntil = now + 30_000;
+                    }
+                    return v;
+                }
+            });
+
+            AuthFailureRecord updated = authFailureMap.get(lowerUser);
+            if (updated != null && updated.lockedUntil > now) {
+                return ResponseEntity.ok(new CommandResponse(false,
+                        "Error: Rate limit exceeded. 5 failed login attempts. User '" + username + "' locked for 30 seconds.", null));
+            }
+
             return ResponseEntity.ok(new CommandResponse(false,
                     "Authentication failed: Invalid username or password.", null));
         }
+
+        // Reset rate limit tracking on successful authentication
+        authFailureMap.remove(lowerUser);
 
         // User is authenticated for this request. Execute operation:
         switch (operation) {

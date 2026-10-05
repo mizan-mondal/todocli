@@ -30,6 +30,7 @@ class CommandControllerTest {
     void setUp() {
         taskRepository.deleteAll();
         userRepository.deleteAll();
+        commandController.resetRateLimits();
     }
 
     private CommandResponse sendCommand(String cmd) {
@@ -310,5 +311,54 @@ class CommandControllerTest {
         CommandResponse oobTo = sendCommand("mizan mypassword priority 1 to 5");
         assertFalse(oobTo.isSuccess());
         assertTrue(oobTo.getOutput().contains("Target position #5 is out of bounds"));
+    }
+
+    @Test
+    void testAuthenticationRateLimiting() {
+        // Create user
+        sendCommand("ratetest mypassword create");
+
+        // 4 failed attempts should report authentication failure
+        for (int i = 1; i <= 4; i++) {
+            CommandResponse failResp = sendCommand("ratetest badpass" + i + " list");
+            assertFalse(failResp.isSuccess());
+            assertTrue(failResp.getOutput().contains("Authentication failed: Invalid username or password."));
+        }
+
+        // 5th failed attempt should trigger 30-second lockout
+        CommandResponse fifthResp = sendCommand("ratetest badpass5 list");
+        assertFalse(fifthResp.isSuccess());
+        assertTrue(fifthResp.getOutput().contains("Rate limit exceeded. 5 failed login attempts. User 'ratetest' locked for 30 seconds."));
+
+        // Subsequent attempt while locked (even with correct password) should be blocked by rate limiter
+        CommandResponse lockedResp = sendCommand("ratetest mypassword list");
+        assertFalse(lockedResp.isSuccess());
+        assertTrue(lockedResp.getOutput().contains("Error: Rate limit exceeded for user 'ratetest'"));
+
+        // Reset rate limits allows successful login
+        commandController.resetRateLimits();
+        CommandResponse successResp = sendCommand("ratetest mypassword list");
+        assertTrue(successResp.isSuccess());
+    }
+
+    @Test
+    void testRegistrationRateLimiting() {
+        commandController.resetRateLimits();
+
+        // 10 creations in under a minute should succeed
+        for (int i = 1; i <= 10; i++) {
+            CommandResponse res = sendCommand("flooduser" + i + " pass123 create");
+            assertTrue(res.isSuccess());
+        }
+
+        // 11th creation should be blocked by registration flood limiter
+        CommandResponse blocked = sendCommand("flooduser11 pass123 create");
+        assertFalse(blocked.isSuccess());
+        assertTrue(blocked.getOutput().contains("Rate limit exceeded. Too many new accounts registered recently."));
+
+        // Resetting rate limits allows creation again
+        commandController.resetRateLimits();
+        CommandResponse unblocked = sendCommand("flooduser11 pass123 create");
+        assertTrue(unblocked.isSuccess());
     }
 }
