@@ -94,19 +94,6 @@ function getSupabase() {
   return null;
 }
 
-function setSupabaseConfig(url, key) {
-  const cleanUrl = url.trim();
-  const cleanKey = key.trim();
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({ url: cleanUrl, key: cleanKey }));
-  if (window.supabase && window.supabase.createClient) {
-    supabaseClient = window.supabase.createClient(cleanUrl, cleanKey);
-  }
-}
-
-function clearSupabaseConfig() {
-  localStorage.removeItem(CONFIG_STORAGE_KEY);
-  supabaseClient = null;
-}
 
 // Session Management Helpers (Browser persistence ONLY for login session)
 function getSession() {
@@ -252,11 +239,6 @@ async function executeCommand() {
     return;
   }
 
-  // Handle configuration commands with credential masking
-  if (lower.startsWith('config supabase') || lower === 'supabase status' || lower === 'config status') {
-    handleSupabaseConfigCommand(raw, activePrompt);
-    return;
-  }
 
   // Parse command tokens
   const tokens = raw.split(/\s+/);
@@ -293,70 +275,6 @@ async function executeCommand() {
   await executeDatabaseCommand(commandToRun, raw, activePrompt);
 }
 
-function handleSupabaseConfigCommand(raw, activePrompt) {
-  const parts = raw.split(/\s+/);
-
-  // Status check: never disclose raw endpoint URL or keys
-  if (parts.length === 2 || (parts.length === 3 && parts[2].toLowerCase() === 'status')) {
-    const config = getSupabaseConfig();
-    if (config.url && config.key) {
-      appendHistory(
-        raw,
-        'Database Configuration:\n' +
-        '  Status: Connected (Protected)\n' +
-        '  Access Control: Active (Row-Level Security & Credential Isolation)\n' +
-        '  Admin Access: Managed via Vercel / Supabase Settings',
-        'success',
-        activePrompt
-      );
-    } else {
-      appendHistory(
-        raw,
-        'Database Configuration:\n' +
-        '  Status: Not configured\n' +
-        '  Notice: Administrative deployment credentials (Vercel) required.',
-        'error',
-        activePrompt
-      );
-    }
-    return;
-  }
-
-  // Clear credentials
-  if (parts.length === 3 && parts[2].toLowerCase() === 'clear') {
-    clearSupabaseConfig();
-    appendHistory(raw, 'Browser-stored database credentials cleared.', 'success', activePrompt);
-    return;
-  }
-
-  // Manual configuration attempt
-  if (parts.length >= 4) {
-    const url = parts[2];
-    const key = parts[3];
-    try {
-      new URL(url);
-    } catch (e) {
-      appendHistory(raw, `Error: '${url}' is not a valid URL.`, 'error', activePrompt);
-      return;
-    }
-
-    setSupabaseConfig(url, key);
-    appendHistory(
-      raw,
-      'Database connection configured successfully! Status: Protected.',
-      'success',
-      activePrompt
-    );
-    return;
-  }
-
-  appendHistory(
-    raw,
-    'Database Configuration:\n  Status: Protected\n  Admin access managed via Vercel or Supabase.',
-    'error',
-    activePrompt
-  );
-}
 
 // Cryptography helpers (Salted SHA-256 using browser Web Crypto API)
 const saltCache = new Map();

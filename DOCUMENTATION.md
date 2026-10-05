@@ -497,10 +497,7 @@ flowchart TD
     CheckHelp -- No --> CheckWhoami{Command == 'whoami'?}
     
     CheckWhoami -- Yes --> RenderWhoami[Display active user or 'Not logged in'] --> End
-    CheckWhoami -- No --> CheckConfig{Starts with 'config supabase'?}
-    
-    CheckConfig -- Yes --> ExecConfig[Execute Supabase Config Handler] --> End
-    CheckConfig -- No --> CheckShortcut{First token in ['list','ls','add','delete','logout']?}
+    CheckWhoami -- No --> CheckShortcut{First token in ['list','ls','add','delete','logout']?}
     
     CheckShortcut -- Yes --> HasSession{Is user logged in?}
     HasSession -- No --> ShowAuthErr["Error: Invalid command format. Log in first."] --> End

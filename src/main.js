@@ -10,9 +10,6 @@
 
 import {
   isSupabaseConfigured,
-  getSupabaseConfig,
-  setSupabaseConfig,
-  clearSupabaseConfig,
   dbCreateUser,
   dbAuthenticateUser,
   dbListTasks,
@@ -220,11 +217,6 @@ async function executeCommand() {
     return;
   }
 
-  // Handle configuration commands with credential masking
-  if (lower.startsWith('config supabase') || lower === 'supabase status' || lower === 'config status') {
-    handleSupabaseConfigCommand(raw, activePrompt);
-    return;
-  }
 
   // Parse command tokens
   const tokens = raw.split(/\s+/);
@@ -263,90 +255,6 @@ async function executeCommand() {
   await executeDatabaseCommand(commandToRun, raw, activePrompt);
 }
 
-function handleSupabaseConfigCommand(raw, activePrompt) {
-  const parts = raw.split(/\s+/);
-
-  // Status check: never disclose raw endpoint URL or keys
-  if (parts.length === 2 || (parts.length === 3 && parts[2].toLowerCase() === 'status')) {
-    const config = getSupabaseConfig();
-    if (config.url && config.key) {
-      appendHistory(
-        raw,
-        'Database Configuration:\n' +
-        '  Status: Connected (Protected)\n' +
-        '  Access Control: Active (Row-Level Security & Credential Isolation)\n' +
-        '  Admin Access: Managed via Vercel / Supabase Settings',
-        'success',
-        activePrompt
-      );
-    } else {
-      appendHistory(
-        raw,
-        'Database Configuration:\n' +
-        '  Status: Not configured\n' +
-        '  Notice: Administrative deployment credentials (Vercel) required.',
-        'error',
-        activePrompt
-      );
-    }
-    return;
-  }
-
-  // Clear credentials
-  if (parts.length === 3 && parts[2].toLowerCase() === 'clear') {
-    const config = getSupabaseConfig();
-    if (config.source === 'env') {
-      appendHistory(
-        raw,
-        'Notice: Administrative environment credentials (Vercel) cannot be cleared by client session.',
-        'error',
-        activePrompt
-      );
-    } else {
-      clearSupabaseConfig();
-      appendHistory(raw, 'Browser-stored database configuration cleared.', 'success', activePrompt);
-    }
-    return;
-  }
-
-  // Manual configuration attempt
-  if (parts.length >= 4) {
-    const config = getSupabaseConfig();
-    if (config.source === 'env') {
-      appendHistory(
-        raw,
-        'Notice: Database configuration is securely managed by administrative environment settings (Vercel). Manual terminal overrides are disabled.',
-        'error',
-        activePrompt
-      );
-      return;
-    }
-    const url = parts[2];
-    const key = parts[3];
-    try {
-      new URL(url);
-    } catch (e) {
-      appendHistory(raw, `Error: '${url}' is not a valid URL.`, 'error', activePrompt);
-      return;
-    }
-
-    setSupabaseConfig(url, key);
-    appendHistory(
-      raw,
-      'Database connection configured successfully! Status: Protected.',
-      'success',
-      activePrompt
-    );
-    return;
-  }
-
-  appendHistory(
-    raw,
-    'Database Configuration:\n  Status: Protected\n  Admin access managed via Vercel or Supabase.',
-    'error',
-    activePrompt
-  );
-}
 
 /**
  * Execute command against Supabase Database
