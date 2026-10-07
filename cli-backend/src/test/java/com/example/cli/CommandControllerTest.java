@@ -121,6 +121,11 @@ class CommandControllerTest {
         assertTrue(loginResp.isSuccess());
         assertTrue(loginResp.getOutput().contains("logged in successfully"));
 
+        // Logging in again using the same username should display "<username>" already logged in !
+        CommandResponse reloginResp = sendCommand("mizan mypassword login");
+        assertFalse(reloginResp.isSuccess());
+        assertTrue(reloginResp.getOutput().contains("\"mizan\" already logged in !"));
+
         // Logout with wrong password should fail
         CommandResponse logoutWrong = sendCommand("mizan wrongpass logout");
         assertFalse(logoutWrong.isSuccess());

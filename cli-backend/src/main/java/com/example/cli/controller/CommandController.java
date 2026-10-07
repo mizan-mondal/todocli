@@ -33,10 +33,12 @@ public class CommandController {
 
     private final Map<String, AuthFailureRecord> authFailureMap = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentLinkedQueue<Long> registrationTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.Set<String> activeLoggedInUsers = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public void resetRateLimits() {
         authFailureMap.clear();
         registrationTimestamps.clear();
+        activeLoggedInUsers.clear();
     }
 
     public CommandController(TaskRepository taskRepository, UserRepository userRepository) {
@@ -221,10 +223,16 @@ public class CommandController {
         // User is authenticated for this request. Execute operation:
         switch (operation) {
             case "login":
+                if (activeLoggedInUsers.contains(lowerUser)) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "\"" + username + "\" already logged in !", null));
+                }
+                activeLoggedInUsers.add(lowerUser);
                 return ResponseEntity.ok(new CommandResponse(true,
                         "User '" + username + "' logged in successfully.", null));
 
             case "logout":
+                activeLoggedInUsers.remove(lowerUser);
                 return ResponseEntity.ok(new CommandResponse(true,
                         "User '" + username + "' logged out successfully.", null));
 

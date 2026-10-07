@@ -13,6 +13,7 @@ A web-based command-line interface (CLI) for a to-do list application powered by
 - **Browser-Only Offline Session Persistence**:
   - Typing `<username> <password> login` validates your credentials with Supabase and stores **only** the login session (`todocli_session`) in the browser (`localStorage`).
   - When returning to the terminal or refreshing the page, your session is remembered without needing to re-login.
+  - If already logged in, attempting to log in again with the same username displays `"<username>" already logged in !`.
   - The terminal prompt dynamically displays `<username>:~$`.
   - While logged in, shortcut commands (`list`, `add task <name>`, `delete task <number>`, `whoami`, `logout`) are available without re-typing credentials.
 - **Logout**:

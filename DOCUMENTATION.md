@@ -458,7 +458,7 @@ Operation       ::= "create"
 | Command Syntax | Authentication Required | Description | Example Usage |
 | :--- | :---: | :--- | :--- |
 | `<user> <pass> create` | No | Creates a new account with a unique username and salted hash | `mizan secret123 create` |
-| `<user> <pass> login` | No (Validates) | Authenticates credentials and stores session in browser `localStorage` | `mizan secret123 login` |
+| `<user> <pass> login` | No (Validates) | Authenticates credentials and stores session in browser `localStorage` (displays `"<username>" already logged in !` if already logged in) | `mizan secret123 login` |
 | `<user> <pass> logout` | Yes | Validates credentials and removes session from `localStorage` | `mizan secret123 logout` |
 | `<user> <pass> list` | Yes | Retrieves all tasks owned by user, sorted by position ascending | `mizan secret123 list` |
 | `<user> <pass> ls` | Yes | **Exact alias for `list`** (Unix shortcut) | `mizan secret123 ls` |
@@ -850,7 +850,7 @@ The Java backend contains a comprehensive JUnit 5 integration test suite in [`Co
 | `testHelpAndClear()` | Verifies that `help` prints the syntax manual and `clear` returns empty output. |
 | `testUserCreation()` | Tests user registration, duplicate prevention, and verifies that plaintext passwords are never stored. |
 | `testAuthenticationFailures()` | Validates error handling for unknown usernames and incorrect passwords. |
-| `testLoginAndLogoutCommands()` | Verifies session lifecycle, credential checks, and logout responses. |
+| `testLoginAndLogoutCommands()` | Verifies session lifecycle, credential checks, already logged in prevention, and logout responses. |
 | `testFullWorkflowAccordingToSpec()` | End-to-end integration test: registration, empty list, multi-item creation, serial number output formatting, task deletion, re-indexing, and out-of-bounds error handling. |
 | `testListAndLsGiveSameResult()` | Specifically asserts that `list` and `ls` return identical success flags, text outputs, and task payloads across both empty and populated states. |
 | `testPriorityCommand()` | Tests priority repositioning (e.g. `3 to 1`, `1 to 3`, `2 to 1`), stack shifting verification, boundary checks, and syntax validation. |

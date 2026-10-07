@@ -239,10 +239,29 @@ async function executeCommand() {
     return;
   }
 
+  // Check if already logged in and trying to log in again
+  if (session && session.username) {
+    if (lower === 'login') {
+      appendHistory(raw, `"${session.username}" already logged in !`, '', activePrompt);
+      return;
+    }
+  }
 
   // Parse command tokens
   const tokens = raw.split(/\s+/);
   const firstTokenLower = tokens[0].toLowerCase();
+
+  // If already logged in and attempting to login again with same username
+  if (session && session.username && session.username.toLowerCase() === firstTokenLower) {
+    if (tokens.length === 2 && tokens[1].toLowerCase() === 'login') {
+      appendHistory(raw, `"${tokens[0]}" already logged in !`, '', activePrompt);
+      return;
+    }
+    if (tokens.length >= 3 && tokens[2].toLowerCase() === 'login') {
+      appendHistory(raw, `"${tokens[0]}" already logged in !`, '', activePrompt);
+      return;
+    }
+  }
 
   // Handle shortcut commands when logged in
   let commandToRun = raw;
@@ -660,6 +679,12 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
       }
 
       case 'login': {
+        const currentSession = getSession();
+        if (currentSession && currentSession.username && currentSession.username.toLowerCase() === username.toLowerCase()) {
+          appendHistory(displayCmd, `"${username}" already logged in !`, '', activePrompt);
+          break;
+        }
+
         const auth = await dbAuthenticateUser(username, password);
         if (auth.success) {
           saveSession({ username, password });
