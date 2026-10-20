@@ -106,5 +106,5 @@ export function isPastDeadline(deadline) {
  * Formats the "sus" ASCII art inside an HTML container for terminal rendering
  */
 export function formatSusArtHtml() {
-  return `<div class="sus-art-container"><pre class="sus-art">${sus}</pre><div class="sus-caption">🤨 [SUS DETECTED] Task deadline is in the past!</div></div>`;
+  return `<div class="sus-art-container"><pre class="sus-art">${sus}</pre><div class="sus-caption">you got a time machine ?</div></div>`;
 }

@@ -233,7 +233,7 @@ html, body {
 
 /* "sus" ASCII Art Easter Egg & Past-Deadline Guard */
 .sus-art-container {
-  margin: 12px 0;
+  margin: 8px 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -242,22 +242,22 @@ html, body {
 
 .sus-art {
   font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
-  font-size: clamp(5.5px, 0.95vw, 10.5px);
-  line-height: 1.05;
+  font-size: clamp(4.2px, min(0.75vw, 0.85vh), 7px);
+  line-height: 0.98;
   white-space: pre;
   overflow-x: auto;
   max-width: 100%;
   color: #fbbf24;
   user-select: text;
-  text-shadow: 0 0 10px rgba(251, 191, 36, 0.25);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.22);
   background: rgba(251, 191, 36, 0.03);
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-left: 2px solid #f59e0b;
   border-radius: 4px;
 }
 
 .sus-caption {
-  margin-top: 8px;
+  margin-top: 6px;
   color: #f87171;
   font-weight: 600;
   font-size: 13px;

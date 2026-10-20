@@ -437,7 +437,7 @@ public class CommandController {
                 String deadlineSuffix = (parsedDeadline != null) ? String.format(" [Deadline: %s]", parsedDeadline.format(DateTimeFormatter.ofPattern("d MMM yyyy"))) : "";
                 String addOutput = String.format("Task added: \"%s\"%s", taskName, deadlineSuffix);
                 if (parsedDeadline != null && parsedDeadline.isBefore(LocalDateTime.now())) {
-                    addOutput = SUS_ASCII + "\n" + addOutput;
+                    addOutput = SUS_ASCII + "\nyou got a time machine ?\n" + addOutput;
                 }
                 return ResponseEntity.ok(new CommandResponse(true, addOutput, currentTasksAfterAdd));
 
@@ -634,7 +634,7 @@ public class CommandController {
                     taskRepository.save(targetDlTask);
                     String dlMsg = String.format("Deadline updated for task #%d (\"%s\") [Deadline: %s].", dlTaskNum, targetDlTask.getTaskName(), newDl.format(DateTimeFormatter.ofPattern("d MMM yyyy")));
                     if (newDl.isBefore(LocalDateTime.now())) {
-                        dlMsg = SUS_ASCII + "\n" + dlMsg;
+                        dlMsg = SUS_ASCII + "\nyou got a time machine ?\n" + dlMsg;
                     }
                     return ResponseEntity.ok(new CommandResponse(true,
                             dlMsg,

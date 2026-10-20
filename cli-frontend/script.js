@@ -127,7 +127,7 @@ function isPastDeadline(deadline) {
 }
 
 function formatSusArtHtml() {
-  return `<div class="sus-art-container"><pre class="sus-art">${sus}</pre><div class="sus-caption">🤨 [SUS DETECTED] Task deadline is in the past!</div></div>`;
+  return `<div class="sus-art-container"><pre class="sus-art">${sus}</pre><div class="sus-caption">you got a time machine ?</div></div>`;
 }
 
 // =============================================================================
@@ -1490,7 +1490,11 @@ function appendHistory(cmd, output, type = '', promptLabel = null, isHtml = fals
   `;
 
   terminalHistory.appendChild(entry);
-  window.scrollTo(0, document.body.scrollHeight);
+  if (entry.querySelector('.sus-art-container')) {
+    entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
 }
 
 function escapeHtml(str) {

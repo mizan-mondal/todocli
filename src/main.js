@@ -664,7 +664,11 @@ function appendHistory(cmd, output, type = '', promptLabel = null, isHtml = fals
   `;
 
   terminalHistory.appendChild(entry);
-  window.scrollTo(0, document.body.scrollHeight);
+  if (entry.querySelector('.sus-art-container')) {
+    entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
 }
 
 function escapeHtml(str) {

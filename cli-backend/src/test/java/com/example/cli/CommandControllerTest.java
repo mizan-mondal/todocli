@@ -413,6 +413,7 @@ class CommandControllerTest {
         assertTrue(pastResp.isSuccess());
         assertTrue(pastResp.getOutput().contains("Task added: \"Fix ancient bug\" [Deadline: 1 Jan 2020]"));
         assertTrue(pastResp.getOutput().contains("@@@@@@@#*+****++=="));
+        assertTrue(pastResp.getOutput().contains("you got a time machine ?"));
 
         // Test direct "sus" command
         CommandResponse susResp = sendCommand("sus");
