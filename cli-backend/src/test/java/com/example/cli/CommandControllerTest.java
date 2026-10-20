@@ -366,4 +366,41 @@ class CommandControllerTest {
         CommandResponse unblocked = sendCommand("flooduser11 pass123 create");
         assertTrue(unblocked.isSuccess());
     }
+
+    @Test
+    void testDeadlineFeature() {
+        sendCommand("mizan pass123 create");
+
+        // Add task with explicit deadline flag
+        CommandResponse addResp = sendCommand("mizan pass123 add task Submit project report --by 281026");
+        assertTrue(addResp.isSuccess());
+        assertTrue(addResp.getOutput().contains("Task added: \"Submit project report\" [Deadline: 28 Oct 2026]"));
+
+        // Add task with --by n (explicit no deadline)
+        CommandResponse addNoDl = sendCommand("mizan pass123 add task Buy milk --by n");
+        assertTrue(addNoDl.isSuccess());
+        assertTrue(addNoDl.getOutput().contains("Task added: \"Buy milk\""));
+
+        // List tasks
+        CommandResponse listResp = sendCommand("mizan pass123 list");
+        assertTrue(listResp.isSuccess());
+        assertTrue(listResp.getOutput().contains("1. Submit project report [Due: 28 Oct 2026]"));
+        assertTrue(listResp.getOutput().contains("2. Buy milk"));
+
+        // Update deadline for task 2
+        CommandResponse dlUpdate = sendCommand("mizan pass123 deadline 2 151126");
+        assertTrue(dlUpdate.isSuccess());
+        assertTrue(dlUpdate.getOutput().contains("Deadline updated for task #2 (\"Buy milk\") [Deadline: 15 Nov 2026]"));
+
+        // Remove deadline for task 1
+        CommandResponse dlRemove = sendCommand("mizan pass123 deadline 1 none");
+        assertTrue(dlRemove.isSuccess());
+        assertTrue(dlRemove.getOutput().contains("Deadline removed for task #1 (\"Submit project report\")."));
+
+        // Verify list again
+        CommandResponse listResp2 = sendCommand("mizan pass123 list");
+        assertTrue(listResp2.isSuccess());
+        assertFalse(listResp2.getOutput().contains("Submit project report [Due:"));
+        assertTrue(listResp2.getOutput().contains("Buy milk [Due: 15 Nov 2026]"));
+    }
 }

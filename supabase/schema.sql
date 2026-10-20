@@ -18,15 +18,18 @@ CREATE TABLE IF NOT EXISTS tasks (
     username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
     task_name TEXT NOT NULL,
     position INT DEFAULT 0,
+    deadline TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure position column exists if updating an existing table
+-- Ensure position & deadline columns exist if updating an existing table
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position INT DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ;
 
 -- 3. Indexes for fast lookup and deterministic ordering
 CREATE INDEX IF NOT EXISTS idx_tasks_username_position ON tasks(username, position ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_tasks_username_id ON tasks(username, id ASC);
+CREATE INDEX IF NOT EXISTS idx_tasks_username_deadline ON tasks(username, deadline ASC);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 -- =============================================================================
@@ -223,6 +226,7 @@ BEGIN
             'id', t.id,
             'task_name', t.task_name,
             'position', t.position,
+            'deadline', t.deadline,
             'created_at', t.created_at
         ) ORDER BY t.position ASC, t.id ASC
     ), '[]'::jsonb)
@@ -237,11 +241,12 @@ BEGIN
 END;
 $$;
 
--- 5.5 Add Task (Requires valid credentials; adds task for authenticated user only)
+-- 5.5 Add Task (Requires valid credentials; adds task with optional deadline)
 CREATE OR REPLACE FUNCTION todocli_add_task(
     p_username TEXT,
     p_password_hash TEXT,
-    p_task_name TEXT
+    p_task_name TEXT,
+    p_deadline TIMESTAMPTZ DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -271,13 +276,71 @@ BEGIN
     FROM tasks
     WHERE username = trim(p_username);
 
-    INSERT INTO tasks (username, task_name, position)
-    VALUES (trim(p_username), v_clean_task, v_next_pos);
+    INSERT INTO tasks (username, task_name, position, deadline)
+    VALUES (trim(p_username), v_clean_task, v_next_pos, p_deadline);
 
     RETURN jsonb_build_object(
         'success', true,
         'message', 'Task added: "' || v_clean_task || '"'
     );
+END;
+$$;
+
+-- 5.5.1 Update Task Deadline (Set or clear deadline using 1-based display serial number)
+CREATE OR REPLACE FUNCTION todocli_update_deadline(
+    p_username TEXT,
+    p_password_hash TEXT,
+    p_task_number INT,
+    p_deadline TIMESTAMPTZ DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_auth BOOLEAN;
+    v_total INT;
+    v_task_id BIGINT;
+    v_task_name TEXT;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM users 
+        WHERE username = trim(p_username) AND password_hash = p_password_hash
+    ) INTO v_auth;
+
+    IF NOT v_auth THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Authentication failed: Invalid username or password.');
+    END IF;
+
+    SELECT COUNT(*) INTO v_total FROM tasks WHERE username = trim(p_username);
+    IF v_total = 0 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Task not found. No tasks exist for user ''' || trim(p_username) || '''.');
+    END IF;
+
+    IF p_task_number < 1 OR p_task_number > v_total THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Error: Task number ' || p_task_number || ' is out of bounds (1-' || v_total || ').');
+    END IF;
+
+    -- Map serial number to id
+    WITH ordered AS (
+        SELECT id, task_name, ROW_NUMBER() OVER (ORDER BY position ASC, id ASC) as rn
+        FROM tasks
+        WHERE username = trim(p_username)
+    )
+    SELECT id, task_name INTO v_task_id, v_task_name
+    FROM ordered
+    WHERE rn = p_task_number;
+
+    UPDATE tasks
+    SET deadline = p_deadline
+    WHERE id = v_task_id;
+
+    IF p_deadline IS NULL THEN
+        RETURN jsonb_build_object('success', true, 'message', 'Deadline removed for task #' || p_task_number || ' ("' || v_task_name || '").');
+    ELSE
+        RETURN jsonb_build_object('success', true, 'message', 'Deadline updated for task #' || p_task_number || ' ("' || v_task_name || '").');
+    END IF;
 END;
 $$;
 

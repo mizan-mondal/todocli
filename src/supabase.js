@@ -325,7 +325,7 @@ export async function dbListTasks(username, password) {
   return { success: false, message: data?.message || 'Failed to list tasks.' };
 }
 
-export async function dbAddTask(username, password, taskName) {
+export async function dbAddTask(username, password, taskName, deadline = null) {
   const auth = await dbAuthenticateUser(username, password);
   if (!auth.success) {
     return { success: false, message: auth.message };
@@ -337,7 +337,8 @@ export async function dbAddTask(username, password, taskName) {
   const { data, error } = await supabase.rpc('todocli_add_task', {
     p_username: cleanUser,
     p_password_hash: auth.user.password_hash,
-    p_task_name: taskName
+    p_task_name: taskName,
+    p_deadline: deadline
   });
 
   if (error) {
@@ -351,6 +352,35 @@ export async function dbAddTask(username, password, taskName) {
   }
 
   return data || { success: true, message: `Task added: "${taskName}"` };
+}
+
+export async function dbUpdateDeadline(username, password, taskNumber, deadline = null) {
+  const auth = await dbAuthenticateUser(username, password);
+  if (!auth.success) {
+    return { success: false, message: auth.message };
+  }
+
+  const supabase = getSupabase();
+  const cleanUser = username.trim();
+
+  const { data, error } = await supabase.rpc('todocli_update_deadline', {
+    p_username: cleanUser,
+    p_password_hash: auth.user.password_hash,
+    p_task_number: parseInt(taskNumber, 10),
+    p_deadline: deadline
+  });
+
+  if (error) {
+    if (error.code === 'PGRST202' || error.message?.includes('function') || error.message?.includes('not found')) {
+      return {
+        success: false,
+        message: 'Database setup required: Please run "supabase/schema.sql" in your Supabase SQL Editor.'
+      };
+    }
+    return { success: false, message: `Database error while updating deadline: ${error.message}` };
+  }
+
+  return data || { success: true, message: `Deadline updated for task #${taskNumber}.` };
 }
 
 export async function dbDeleteTask(username, password, taskNumberInput) {

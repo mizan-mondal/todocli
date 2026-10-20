@@ -71,20 +71,67 @@ Database connection credentials are treated as administrative configuration and 
 | `<username> <password> create` | Register a new user account | `mizan mypassword create` |
 | `<username> <password> login` | Log in and persist session offline in browser | `mizan mypassword login` |
 | `<username> <password> logout` | Log out and clear browser session | `mizan mypassword logout` |
-| `<username> <password> list` / `ls` | List all tasks with serial numbers | `mizan mypassword list` |
-| `<username> <password> add task <task_name>` | Add a new task | `mizan mypassword add task Buy groceries` |
+| `<username> <password> list` / `ls` | List all tasks with color-coded urgency and deadlines | `mizan mypassword list` |
+| `<username> <password> add task <task_name>` | Add task (auto-detects NLP deadlines with interactive confirmation) | `mizan mypassword add task Buy groceries` |
+| `<username> <password> add task <name> --by <d>` | Add task with explicit deadline (`DDMMYY` or `n` to bypass confirmation) | `mizan mypassword add task Report --by 281026` |
 | `<username> <password> delete task <task_numbers>` | Delete one or more tasks using serial numbers | `mizan mypassword delete task 1,2,5` |
 | `<username> <password> priority <from> to <to>` | Reorder a task by moving it to a new priority position | `mizan mypassword priority 3 to 1` |
+| `<username> <password> deadline <num> <date>` | Set, change, or remove task deadline (`DDMMYY`, weekday, or `none`) | `mizan mypassword deadline 2 281026` |
 | **When Logged In (Shortcut Commands)** | | |
-| `list` / `ls` | List tasks for the currently logged-in user | `ls` |
-| `add task <task_name>` | Add a task for the currently logged-in user | `add task Buy coffee` |
+| `list` / `ls` | List tasks for the currently logged-in user with color-coded urgency | `ls` |
+| `add task <task_name>` | Add a task (auto-detects NLP deadline with interactive confirmation) | `add task Finish report by friday` |
+| `add task <name> --by <DDMMYY\|n>` | Add task with explicit deadline (bypasses prompt) | `add task Finish book --by n` |
 | `delete task <task_numbers>` | Delete one or more tasks using 1-based serial numbers | `delete task 1,2,5` |
 | `priority <from> to <to>` | Move task to a new priority position | `priority 3 to 1` |
+| `deadline <task_number> <date\|none>` | Update or remove deadline for task | `deadline 1 none` |
 | `whoami` | Display active logged-in user | `whoami` |
 | `logout` | Log out the active session | `logout` |
 | **Utilities** | | |
 | `clear` / `cls` | Clear the terminal display | `clear` |
 | `help` | Display the command usage manual | `help` |
+
+---
+
+## ⏰ Client-Side NLP Deadlines & Color-Coded Urgency
+
+### 1. 100% Client-Side NLP Date Parsing
+The terminal parses natural language date cues on your device without server overhead:
+- **Relative Weekdays**:
+  - `"this saturday"`: Targets the nearest upcoming Saturday.
+  - `"next thursday"`: Skips this week's Thursday and targets the following one (+7 days).
+  - `"by friday"` / `"on monday"`: Targets the nearest upcoming occurrence.
+- **Specific Dates**:
+  - `"by 29 oct"` / `"29th october"`: Automatically maps to the correct date.
+- **Relative Offsets**:
+  - `"tomorrow"`, `"today"`, `"in 3 days"`, `"in 2 weeks"`.
+
+### 2. Interactive Confirmation Safeguard
+The system **never** finalizes a parsed deadline automatically:
+```text
+todocli:~$ add task complete assignment by friday
+[NLP] Detected deadline: Friday, 23rd October 2026
+Confirm deadline? (y/n): y
+Task added: "complete assignment" [Deadline: Friday, 23rd October 2026]
+```
+If you reply `n`, the CLI prompts: `Please enter deadline in "DDMMYY" format (or press Enter for no deadline):`.
+
+### 3. Power-User Flags (`--by <DDMMYY>` & `--by n`)
+Bypass NLP and interactive confirmation entirely:
+```bash
+# Add with explicit deadline (DDMMYY format):
+add task Submit project --by 281026
+
+# Add with no deadline explicitly:
+add task Buy groceries --by n
+```
+If a task description contains no date cues (e.g., `add task Buy milk`), it is created immediately with no deadline (single step).
+
+### 4. Color-Coded Urgency (No Dots, Text-Tinted)
+Instead of leading bullet dots, the task text itself is dynamically colored based on urgency:
+- 🔴 **Red (`#f87171`)**: Overdue tasks (deadline passed).
+- 🟡 **Yellow (`#fbbf24`)**: Due today or within 48 hours.
+- 🟢 **Green (`#34d399`)**: Upcoming tasks (> 48 hours away).
+- ⚪ **Gray (`#e5e7eb`)**: Tasks without a deadline.
 
 ---
 

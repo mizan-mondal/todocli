@@ -15,12 +15,23 @@ import {
   dbListTasks,
   dbAddTask,
   dbDeleteTask,
-  dbPriorityTask
+  dbPriorityTask,
+  dbUpdateDeadline
 } from './supabase.js';
+
+import {
+  extractExplicitDeadlineFlag,
+  parseNaturalDeadline,
+  parseManualDate,
+  formatDeadlineBadge,
+  getTaskUrgency,
+  formatDateNice
+} from './nlp.js';
 
 const SESSION_STORAGE_KEY = 'todocli_session';
 let commandHistory = JSON.parse(localStorage.getItem('todocli_history') || '[]');
 let historyIndex = -1;
+let pendingPrompt = null;
 
 // DOM Elements
 const cliInput = document.getElementById('cli-input');
@@ -28,7 +39,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'deadline', 'logout'
 ]);
 
 /**
@@ -144,8 +155,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'logout', 'whoami']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline ', 'logout', 'whoami']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline '];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -160,18 +171,28 @@ function getHelpText() {
     '  <username> <password> create                   - Register a new account',
     '  <username> <password> login                    - Log in and save session in browser',
     '  <username> <password> logout                   - Log out and clear session',
-    '  <username> <password> list / ls                - List all tasks',
-    '  <username> <password> add task <task_name>     - Add a new task',
-    '  <username> <password> delete task <task_numbers>- Delete tasks by number (e.g. 1 or 1,2,5)',
+    '  <username> <password> list / ls                - List all tasks with color-coded deadlines',
+    '  <username> <password> add task <task_name>     - Add a new task (auto-detects NLP deadline)',
+    '  <username> <password> add task <name> --by <d> - Add task with explicit deadline (DDMMYY or n)',
+    '  <username> <password> delete task <numbers>    - Delete tasks by number (e.g. 1 or 1,2,5)',
     '  <username> <password> priority <from> to <to>  - Reorder task by moving to a new position',
+    '  <username> <password> deadline <num> <date>    - Set/change deadline (DDMMYY, weekday, or none)',
     '',
     'When Logged In (Shortcut Commands):',
     '  list / ls                                      - List your tasks',
-    '  add task <task_name>                           - Add a new task',
+    '  add task <task_name>                           - Add a new task (auto-detects NLP deadline)',
+    '  add task <name> --by <DDMMYY|n>                - Add task with explicit deadline (no prompt)',
     '  delete task <task_numbers>                     - Delete tasks by number (e.g. 1 or 1,2,5)',
     '  priority <from> to <to>                        - Move task to new priority position',
+    '  deadline <task_number> <date|none>             - Set/change/remove task deadline',
     '  whoami                                         - Show active logged-in user',
     '  logout                                         - Log out active session',
+    '',
+    'Deadline Urgency Colors (applied directly to task names):',
+    '  Red    - Overdue',
+    '  Yellow - Due today / within 48 hours',
+    '  Green  - Upcoming (> 48 hours away)',
+    '  Gray   - No deadline',
     '',
     'Utilities:',
     '  clear / cls                                    - Clear terminal screen',
@@ -179,9 +200,75 @@ function getHelpText() {
   ].join('\n');
 }
 
+/**
+ * Handles interactive NLP confirmation & manual deadline input state machine
+ */
+async function handlePendingPrompt(raw) {
+  if (!pendingPrompt) return;
+
+  const input = raw.trim().toLowerCase();
+  const { username, password, taskName, candidateDeadline, formattedDisplay, activePrompt } = pendingPrompt;
+
+  if (pendingPrompt.step === 'CONFIRM_NLP') {
+    if (input === 'y' || input === 'yes') {
+      appendHistory(raw, '', '', activePrompt);
+      const result = await dbAddTask(username, password, taskName, candidateDeadline);
+      pendingPrompt = null;
+      appendHistory('', result.success ? `Task added: "${taskName}" [Deadline: ${formattedDisplay}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+    } else if (input === 'n' || input === 'no') {
+      appendHistory(raw, '', '', activePrompt);
+      pendingPrompt.step = 'MANUAL_DATE';
+      appendHistory('', 'Please enter deadline in "DDMMYY" format (or press Enter for no deadline):', 'prompt-query', activePrompt);
+    } else if (input === 'cancel') {
+      appendHistory(raw, 'Task creation cancelled.', '', activePrompt);
+      pendingPrompt = null;
+    } else {
+      appendHistory(raw, 'Please enter "y" to confirm, "n" to enter another deadline, or "cancel" to abort:', 'prompt-query', activePrompt);
+    }
+    return;
+  }
+
+  if (pendingPrompt.step === 'MANUAL_DATE') {
+    if (!input || input === 'n' || input === 'no' || input === 'none') {
+      appendHistory(raw || 'n', '', '', activePrompt);
+      const result = await dbAddTask(username, password, taskName, null);
+      pendingPrompt = null;
+      appendHistory('', result.success ? `Task added: "${taskName}" (no deadline)` : result.message, result.success ? 'success' : 'error', activePrompt);
+    } else if (input === 'cancel') {
+      appendHistory(raw, 'Task creation cancelled.', '', activePrompt);
+      pendingPrompt = null;
+    } else {
+      const parsedDate = parseManualDate(input);
+      if (parsedDate) {
+        appendHistory(raw, '', '', activePrompt);
+        const iso = parsedDate.toISOString();
+        const nice = formatDateNice(parsedDate);
+        const result = await dbAddTask(username, password, taskName, iso);
+        pendingPrompt = null;
+        appendHistory('', result.success ? `Task added: "${taskName}" [Deadline: ${nice}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+      } else {
+        appendHistory(raw, `Error: Invalid date format '${raw}'.\nPlease enter deadline in "DDMMYY" format (e.g. 281026) or press Enter for no deadline:`, 'error', activePrompt);
+      }
+    }
+    return;
+  }
+}
+
 async function executeCommand() {
   const raw = cliInput.value.trim();
   if (!raw) return;
+
+  // Intercept interactive prompt states (e.g., NLP confirmation or manual date input)
+  if (pendingPrompt) {
+    commandHistory.push(raw);
+    if (commandHistory.length > 100) commandHistory.shift();
+    localStorage.setItem('todocli_history', JSON.stringify(commandHistory));
+    historyIndex = -1;
+    cliInput.value = '';
+    updateInputDisplay();
+    await handlePendingPrompt(raw);
+    return;
+  }
 
   // Mask credentials before persisting to command history to prevent local credential exposure
   commandHistory.push(maskCommand(raw));
@@ -243,7 +330,7 @@ async function executeCommand() {
 
   // Handle shortcut commands when logged in
   let commandToRun = raw;
-  const isShortcut = ['list', 'ls', 'add', 'delete', 'priority', 'logout'].includes(firstTokenLower);
+  const isShortcut = ['list', 'ls', 'add', 'delete', 'priority', 'deadline', 'logout'].includes(firstTokenLower);
 
   if (isShortcut) {
     if (!session) {
@@ -329,7 +416,25 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
       case 'list':
       case 'ls': {
         const result = await dbListTasks(username, password);
-        appendHistory(displayCmd, result.message, result.success ? '' : 'error', activePrompt);
+        if (!result.success) {
+          appendHistory(displayCmd, result.message, 'error', activePrompt);
+          break;
+        }
+
+        const tasks = result.tasks || [];
+        if (tasks.length === 0) {
+          appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
+          break;
+        }
+
+        const lines = tasks.map((t, idx) => {
+          const urgency = getTaskUrgency(t.deadline);
+          const badge = t.deadline ? formatDeadlineBadge(t.deadline) : '';
+          const badgeHtml = badge ? ` <span class="task-deadline-badge task-${urgency}">${escapeHtml(badge)}</span>` : '';
+          return `<div class="task-line task-${urgency}"><span class="task-num">${idx + 1}.</span><span class="task-title">${escapeHtml(t.task_name)}</span>${badgeHtml}</div>`;
+        }).join('');
+
+        appendHistory(displayCmd, lines, '', activePrompt, true);
         break;
       }
 
@@ -343,14 +448,100 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           appendHistory(displayCmd, `Error: Unknown sub-command '${remainderTokens[0]}'. Usage: add task <task_name>`, 'error', activePrompt);
           return;
         }
-        const taskName = remainderTokens.slice(1).join(' ').trim();
-        if (!taskName) {
+        const rawTaskInput = remainderTokens.slice(1).join(' ').trim();
+        if (!rawTaskInput) {
           appendHistory(displayCmd, 'Error: Task description cannot be empty. Usage: add task <task_name>', 'error', activePrompt);
           return;
         }
 
-        const result = await dbAddTask(username, password, taskName);
+        // 1. Check for explicit --by flag (bypasses interactive prompting)
+        const explicit = extractExplicitDeadlineFlag(rawTaskInput);
+        if (explicit) {
+          if (explicit.error) {
+            appendHistory(displayCmd, `Error: ${explicit.error}`, 'error', activePrompt);
+            return;
+          }
+
+          if (!explicit.hasDeadline) {
+            // Explicitly no deadline (--by n)
+            const result = await dbAddTask(username, password, explicit.cleanedText, null);
+            appendHistory(displayCmd, result.success ? `Task added: "${explicit.cleanedText}" (no deadline)` : result.message, result.success ? 'success' : 'error', activePrompt);
+            return;
+          }
+
+          // Explicit deadline set
+          const iso = explicit.deadlineDate.toISOString();
+          const result = await dbAddTask(username, password, explicit.cleanedText, iso);
+          appendHistory(displayCmd, result.success ? `Task added: "${explicit.cleanedText}" [Deadline: ${explicit.formatted}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+          return;
+        }
+
+        // 2. Client-side NLP extraction
+        const nlp = parseNaturalDeadline(rawTaskInput);
+        if (nlp.hasNlpCue) {
+          // Pause and ask user for confirmation before final saving
+          pendingPrompt = {
+            step: 'CONFIRM_NLP',
+            username,
+            password,
+            taskName: nlp.cleanedTaskName,
+            candidateDeadline: nlp.deadline,
+            formattedDisplay: nlp.formattedDisplay,
+            displayCmd,
+            activePrompt
+          };
+
+          appendHistory(
+            displayCmd,
+            `[NLP] Detected deadline: ${nlp.formattedDisplay}\nConfirm deadline? (y/n):`,
+            'prompt-query',
+            activePrompt
+          );
+          return;
+        }
+
+        // 3. No date cues detected: create task immediately with no deadline (zero-friction single step)
+        const result = await dbAddTask(username, password, rawTaskInput, null);
         appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
+        break;
+      }
+
+      case 'deadline': {
+        if (remainderTokens.length === 0) {
+          appendHistory(displayCmd, 'Error: Missing arguments. Usage: deadline <task_number> <date|none>\nExample: deadline 2 281026 or deadline 2 friday', 'error', activePrompt);
+          return;
+        }
+
+        const taskNum = remainderTokens[0];
+        const dateArg = remainderTokens.slice(1).join(' ').trim();
+
+        if (!dateArg) {
+          appendHistory(displayCmd, 'Error: Missing deadline date. Usage: deadline <task_number> <date|none>\nExample: deadline 2 281026 or deadline 2 friday or deadline 2 none', 'error', activePrompt);
+          return;
+        }
+
+        const dateArgLower = dateArg.toLowerCase();
+        if (dateArgLower === 'none' || dateArgLower === 'clear' || dateArgLower === 'remove' || dateArgLower === 'n') {
+          const result = await dbUpdateDeadline(username, password, taskNum, null);
+          appendHistory(displayCmd, result.message, result.success ? 'success' : 'error', activePrompt);
+          return;
+        }
+
+        let parsedDate = parseManualDate(dateArg);
+        if (!parsedDate) {
+          const natural = parseNaturalDeadline(`dummy by ${dateArg}`);
+          if (natural.hasNlpCue && natural.dateObj) {
+            parsedDate = natural.dateObj;
+          }
+        }
+
+        if (!parsedDate) {
+          appendHistory(displayCmd, `Error: Could not parse date '${dateArg}'. Use DDMMYY format (e.g. 281026), a weekday, or 'none'.`, 'error', activePrompt);
+          return;
+        }
+
+        const result = await dbUpdateDeadline(username, password, taskNum, parsedDate.toISOString());
+        appendHistory(displayCmd, result.success ? `${result.message} [Deadline: ${formatDateNice(parsedDate)}]` : result.message, result.success ? 'success' : 'error', activePrompt);
         break;
       }
 
@@ -416,7 +607,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
       default:
         appendHistory(
           displayCmd,
-          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.`,
+          `Error: Unknown operation '${operation}'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority, deadline. Type 'help' for usage.`,
           'error',
           activePrompt
         );
@@ -427,7 +618,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
   }
 }
 
-function appendHistory(cmd, output, type = '', promptLabel = null) {
+function appendHistory(cmd, output, type = '', promptLabel = null, isHtml = false) {
   const entry = document.createElement('div');
   entry.className = 'history-entry';
 
@@ -435,13 +626,14 @@ function appendHistory(cmd, output, type = '', promptLabel = null) {
   const label = promptLabel || (session && session.username ? `${session.username}:~$` : 'todocli:~$');
 
   const maskedCmd = maskCommand(cmd);
+  const content = isHtml ? output : escapeHtml(output);
 
   entry.innerHTML = `
     <div class="history-command">
       <span class="history-prompt">${escapeHtml(label)}</span>
       <span class="history-cmd-text">${escapeHtml(maskedCmd)}</span>
     </div>
-    ${output ? `<div class="history-output ${type}">${escapeHtml(output)}</div>` : ''}
+    ${output ? `<div class="history-output ${type}">${content}</div>` : ''}
   `;
 
   terminalHistory.appendChild(entry);

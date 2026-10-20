@@ -8,6 +8,8 @@ import com.example.cli.util.PasswordUtil;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -91,6 +93,38 @@ public class CommandController {
         }
     }
 
+    private LocalDateTime parseDeadlineString(String input) {
+        if (input == null) return null;
+        String clean = input.trim();
+        if (clean.equalsIgnoreCase("n") || clean.equalsIgnoreCase("none") || clean.equalsIgnoreCase("clear") || clean.equalsIgnoreCase("remove")) {
+            return null;
+        }
+        // 6 digits DDMMYY (e.g. 281026)
+        if (clean.matches("^\\d{6}$")) {
+            int day = Integer.parseInt(clean.substring(0, 2));
+            int month = Integer.parseInt(clean.substring(2, 4));
+            int year = 2000 + Integer.parseInt(clean.substring(4, 6));
+            return LocalDateTime.of(year, month, day, 23, 59, 59);
+        }
+        // 8 digits DDMMYYYY
+        if (clean.matches("^\\d{8}$")) {
+            int day = Integer.parseInt(clean.substring(0, 2));
+            int month = Integer.parseInt(clean.substring(2, 4));
+            int year = Integer.parseInt(clean.substring(4, 8));
+            return LocalDateTime.of(year, month, day, 23, 59, 59);
+        }
+        // Delimited DD/MM/YY or DD-MM-YY
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(\\d{1,2})[/\\-.](\\d{1,2})[/\\-.](\\d{2,4})$").matcher(clean);
+        if (m.matches()) {
+            int day = Integer.parseInt(m.group(1));
+            int month = Integer.parseInt(m.group(2));
+            int year = Integer.parseInt(m.group(3));
+            if (year < 100) year += 2000;
+            return LocalDateTime.of(year, month, day, 23, 59, 59);
+        }
+        return null;
+    }
+
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
         Map<String, Object> status = new HashMap<>();
@@ -120,16 +154,20 @@ public class CommandController {
                     "  <username> <password> create                   - Register a new account",
                     "  <username> <password> login                    - Log in and save session in browser",
                     "  <username> <password> logout                   - Log out and clear session",
-                    "  <username> <password> list / ls                - List all tasks",
-                    "  <username> <password> add task <task_name>     - Add a new task",
+                    "  <username> <password> list / ls                - List all tasks with color-coded deadlines",
+                    "  <username> <password> add task <task_name>     - Add a new task (auto-detects NLP deadline)",
+                    "  <username> <password> add task <name> --by <d> - Add task with explicit deadline (DDMMYY or n)",
                     "  <username> <password> delete task <task_numbers>- Delete tasks by number (e.g. 1 or 1,2,5)",
                     "  <username> <password> priority <from> to <to>  - Reorder a task by moving it to a new position",
+                    "  <username> <password> deadline <num> <date>    - Set/change deadline (DDMMYY, weekday, or none)",
                     "",
                     "When Logged In (Shortcut Commands):",
                     "  list / ls                                      - List your tasks",
-                    "  add task <task_name>                           - Add a new task",
+                    "  add task <task_name>                           - Add a new task (auto-detects NLP deadline)",
+                    "  add task <name> --by <DDMMYY|n>                - Add task with explicit deadline (no prompt)",
                     "  delete task <task_numbers>                     - Delete tasks by number (e.g. 1 or 1,2,5)",
                     "  priority <from> to <to>                        - Move task to new priority position",
+                    "  deadline <task_number> <date|none>             - Set/change/remove task deadline",
                     "  whoami                                         - Show current logged-in user",
                     "  logout                                         - Log out and clear session",
                     "",
@@ -245,9 +283,18 @@ public class CommandController {
                 }
 
                 StringBuilder sb = new StringBuilder();
+                DateTimeFormatter listDtf = DateTimeFormatter.ofPattern("d MMM yyyy");
+                LocalDateTime nowList = LocalDateTime.now();
                 for (int i = 0; i < tasks.size(); i++) {
                     Task t = tasks.get(i);
                     sb.append(String.format("%d. %s", i + 1, t.getTaskName()));
+                    if (t.getDeadline() != null) {
+                        if (t.getDeadline().isBefore(nowList)) {
+                            sb.append(String.format(" [OVERDUE: %s]", t.getDeadline().format(listDtf)));
+                        } else {
+                            sb.append(String.format(" [Due: %s]", t.getDeadline().format(listDtf)));
+                        }
+                    }
                     if (i < tasks.size() - 1) {
                         sb.append("\n");
                     }
@@ -255,7 +302,7 @@ public class CommandController {
                 return ResponseEntity.ok(new CommandResponse(true, sb.toString(), tasks));
 
             case "add":
-                // Expect: add task <task_name>
+                // Expect: add task <task_name> [--by <date>]
                 if (opArgs.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             "Error: Missing sub-command. Usage: <username> <password> add task <task_name>", null));
@@ -275,13 +322,28 @@ public class CommandController {
                             "Error: Task description cannot be empty. Usage: <username> <password> add task <task_name>", null));
                 }
 
+                LocalDateTime parsedDeadline = null;
+                java.util.regex.Matcher flagMatcher = java.util.regex.Pattern.compile("\\s+--by\\s+(\\S+)\\s*$", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(taskName);
+                if (flagMatcher.find()) {
+                    String flagVal = flagMatcher.group(1);
+                    taskName = flagMatcher.replaceFirst("").trim();
+                    if (!flagVal.equalsIgnoreCase("n") && !flagVal.equalsIgnoreCase("none")) {
+                        parsedDeadline = parseDeadlineString(flagVal);
+                        if (parsedDeadline == null) {
+                            return ResponseEntity.ok(new CommandResponse(false,
+                                    "Error: Invalid date '" + flagVal + "' in --by flag. Use DDMMYY format (e.g. 281026) or \"n\" for no deadline.", null));
+                        }
+                    }
+                }
+
                 List<Task> currentTasksBeforeAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
                 int nextPos = currentTasksBeforeAdd.size() + 1;
-                Task newTask = new Task(username, taskName, nextPos);
+                Task newTask = new Task(username, taskName, nextPos, parsedDeadline);
                 taskRepository.save(newTask);
                 List<Task> currentTasksAfterAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                String deadlineSuffix = (parsedDeadline != null) ? String.format(" [Deadline: %s]", parsedDeadline.format(DateTimeFormatter.ofPattern("d MMM yyyy"))) : "";
                 return ResponseEntity.ok(new CommandResponse(true,
-                        String.format("Task added: \"%s\"", taskName), currentTasksAfterAdd));
+                        String.format("Task added: \"%s\"%s", taskName, deadlineSuffix), currentTasksAfterAdd));
 
             case "delete":
                 // Expect: delete task <task_number> or delete task <task_number,task_number,...>
@@ -426,9 +488,62 @@ public class CommandController {
                         String.format("Task #%d moved to position #%d: \"%s\"", fromIndex, toIndex, moved.getTaskName()),
                         updatedTasks));
 
+            case "deadline":
+                // Expect: deadline <task_number> <date|none>
+                if (opArgs.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing arguments for deadline. Usage: <username> <password> deadline <task_number> <date|none>\nExample: deadline 2 281026 or deadline 2 none", null));
+                }
+
+                String[] dlParts = opArgs.split("\\s+", 2);
+                if (dlParts.length < 2) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Missing deadline date. Usage: <username> <password> deadline <task_number> <date|none>\nExample: deadline 2 281026 or deadline 2 none", null));
+                }
+
+                int dlTaskNum;
+                try {
+                    dlTaskNum = Integer.parseInt(dlParts[0]);
+                } catch (NumberFormatException e) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "Error: Task number must be a valid integer.", null));
+                }
+
+                List<Task> dlTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                if (dlTasks.isEmpty()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            "No tasks found for user '" + username + "'.", null));
+                }
+
+                if (dlTaskNum < 1 || dlTaskNum > dlTasks.size()) {
+                    return ResponseEntity.ok(new CommandResponse(false,
+                            String.format("Error: Task number %d is out of bounds (1-%d).", dlTaskNum, dlTasks.size()), null));
+                }
+
+                Task targetDlTask = dlTasks.get(dlTaskNum - 1);
+                String dlDateStr = dlParts[1].trim();
+                if (dlDateStr.equalsIgnoreCase("none") || dlDateStr.equalsIgnoreCase("clear") || dlDateStr.equalsIgnoreCase("remove") || dlDateStr.equalsIgnoreCase("n")) {
+                    targetDlTask.setDeadline(null);
+                    taskRepository.save(targetDlTask);
+                    return ResponseEntity.ok(new CommandResponse(true,
+                            String.format("Deadline removed for task #%d (\"%s\").", dlTaskNum, targetDlTask.getTaskName()),
+                            taskRepository.findByUsernameOrderByPositionAscIdAsc(username)));
+                } else {
+                    LocalDateTime newDl = parseDeadlineString(dlDateStr);
+                    if (newDl == null) {
+                        return ResponseEntity.ok(new CommandResponse(false,
+                                "Error: Could not parse date '" + dlDateStr + "'. Use DDMMYY format (e.g. 281026) or 'none'.", null));
+                    }
+                    targetDlTask.setDeadline(newDl);
+                    taskRepository.save(targetDlTask);
+                    return ResponseEntity.ok(new CommandResponse(true,
+                            String.format("Deadline updated for task #%d (\"%s\") [Deadline: %s].", dlTaskNum, targetDlTask.getTaskName(), newDl.format(DateTimeFormatter.ofPattern("d MMM yyyy"))),
+                            taskRepository.findByUsernameOrderByPositionAscIdAsc(username)));
+                }
+
             default:
                 return ResponseEntity.ok(new CommandResponse(false,
-                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority. Type 'help' for usage.",
+                        "Error: Unknown operation '" + operation + "'. Allowed operations: create, login, logout, list, ls, add task, delete task, priority, deadline. Type 'help' for usage.",
                         null));
         }
     }

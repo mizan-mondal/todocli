@@ -88,6 +88,68 @@ html, body {
   color: #34d399;
 }
 
+.history-output.prompt-query {
+  color: #38bdf8;
+  font-weight: 500;
+}
+
+/* Deadline Urgency & Task List Styling (Colors applied directly to tasks, no dots) */
+.task-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  line-height: 1.6;
+}
+
+.task-num {
+  color: #6b7280;
+  min-width: 24px;
+}
+
+.task-title {
+  font-weight: 500;
+}
+
+.task-overdue,
+.task-overdue .task-title {
+  color: #f87171 !important; /* Soft Red for Overdue */
+}
+
+.task-due-soon,
+.task-due-soon .task-title {
+  color: #fbbf24 !important; /* Warm Amber for Due Today / Soon */
+}
+
+.task-upcoming,
+.task-upcoming .task-title {
+  color: #34d399 !important; /* Emerald for Upcoming */
+}
+
+.task-no-deadline,
+.task-no-deadline .task-title {
+  color: #e5e7eb !important; /* Default Monospace Light Gray */
+}
+
+.task-deadline-badge {
+  font-size: 0.88em;
+  opacity: 0.85;
+  margin-left: 6px;
+  user-select: none;
+}
+
+.task-deadline-badge.task-overdue {
+  color: #f87171 !important;
+}
+
+.task-deadline-badge.task-due-soon {
+  color: #fbbf24 !important;
+}
+
+.task-deadline-badge.task-upcoming {
+  color: #34d399 !important;
+}
+
 /* Active Prompt Line */
 .prompt-line {
   display: flex;
