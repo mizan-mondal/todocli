@@ -403,4 +403,20 @@ class CommandControllerTest {
         assertFalse(listResp2.getOutput().contains("Submit project report [Due:"));
         assertTrue(listResp2.getOutput().contains("Buy milk [Due: 15 Nov 2026]"));
     }
+
+    @Test
+    void testSusArtOnPastDeadline() {
+        sendCommand("mizan pass123 create");
+
+        // Add task with past deadline (e.g., 010120 = 1 Jan 2020)
+        CommandResponse pastResp = sendCommand("mizan pass123 add task Fix ancient bug --by 010120");
+        assertTrue(pastResp.isSuccess());
+        assertTrue(pastResp.getOutput().contains("Task added: \"Fix ancient bug\" [Deadline: 1 Jan 2020]"));
+        assertTrue(pastResp.getOutput().contains("@@@@@@@#*+****++=="));
+
+        // Test direct "sus" command
+        CommandResponse susResp = sendCommand("sus");
+        assertTrue(susResp.isSuccess());
+        assertTrue(susResp.getOutput().contains("@@@@@@@#*+****++=="));
+    }
 }

@@ -28,6 +28,12 @@ import {
   formatDateNice
 } from './nlp.js';
 
+import {
+  sus,
+  isPastDeadline,
+  formatSusArtHtml
+} from './sus.js';
+
 const SESSION_STORAGE_KEY = 'todocli_session';
 let commandHistory = JSON.parse(localStorage.getItem('todocli_history') || '[]');
 let historyIndex = -1;
@@ -39,7 +45,7 @@ const cliInputDisplay = document.getElementById('cli-input-display');
 const terminalHistory = document.getElementById('terminal-history');
 
 const NON_CREDENTIAL_COMMANDS = new Set([
-  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'deadline', 'logout'
+  'help', 'clear', 'cls', 'whoami', 'list', 'ls', 'add', 'delete', 'priority', 'deadline', 'logout', 'sus'
 ]);
 
 /**
@@ -155,8 +161,8 @@ function handleAutocomplete() {
 
   const session = getSession();
   const available = session
-    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline ', 'logout', 'whoami']
-    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline '];
+    ? ['help', 'clear', 'cls', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline ', 'logout', 'whoami', 'sus']
+    : ['help', 'clear', 'cls', 'create', 'login', 'logout', 'list', 'ls', 'add task ', 'delete task ', 'priority ', 'deadline ', 'sus'];
 
   const match = available.find(c => c.startsWith(val));
   if (match) {
@@ -214,7 +220,11 @@ async function handlePendingPrompt(raw) {
       appendHistory(raw, '', '', activePrompt);
       const result = await dbAddTask(username, password, taskName, candidateDeadline);
       pendingPrompt = null;
-      appendHistory('', result.success ? `Task added: "${taskName}" [Deadline: ${formattedDisplay}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+      let msg = result.success ? `Task added: "${escapeHtml(taskName)}" [Deadline: ${escapeHtml(formattedDisplay)}]` : escapeHtml(result.message);
+      if (result.success && isPastDeadline(candidateDeadline)) {
+        msg = `${formatSusArtHtml()}\n${msg}`;
+      }
+      appendHistory('', msg, result.success ? 'success' : 'error', activePrompt, true);
     } else if (input === 'n' || input === 'no') {
       appendHistory(raw, '', '', activePrompt);
       pendingPrompt.step = 'MANUAL_DATE';
@@ -233,7 +243,7 @@ async function handlePendingPrompt(raw) {
       appendHistory(raw || 'n', '', '', activePrompt);
       const result = await dbAddTask(username, password, taskName, null);
       pendingPrompt = null;
-      appendHistory('', result.success ? `Task added: "${taskName}" (no deadline)` : result.message, result.success ? 'success' : 'error', activePrompt);
+      appendHistory('', result.success ? `Task added: "${escapeHtml(taskName)}" (no deadline)` : escapeHtml(result.message), result.success ? 'success' : 'error', activePrompt);
     } else if (input === 'cancel') {
       appendHistory(raw, 'Task creation cancelled.', '', activePrompt);
       pendingPrompt = null;
@@ -245,7 +255,11 @@ async function handlePendingPrompt(raw) {
         const nice = formatDateNice(parsedDate);
         const result = await dbAddTask(username, password, taskName, iso);
         pendingPrompt = null;
-        appendHistory('', result.success ? `Task added: "${taskName}" [Deadline: ${nice}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+        let msg = result.success ? `Task added: "${escapeHtml(taskName)}" [Deadline: ${escapeHtml(nice)}]` : escapeHtml(result.message);
+        if (result.success && isPastDeadline(parsedDate)) {
+          msg = `${formatSusArtHtml()}\n${msg}`;
+        }
+        appendHistory('', msg, result.success ? 'success' : 'error', activePrompt, true);
       } else {
         appendHistory(raw, `Error: Invalid date format '${raw}'.\nPlease enter deadline in "DDMMYY" format (e.g. 281026) or press Enter for no deadline:`, 'error', activePrompt);
       }
@@ -289,6 +303,11 @@ async function executeCommand() {
 
   const session = getSession();
   const activePrompt = session && session.username ? `${session.username}:~$` : 'todocli:~$';
+
+  if (lower === 'sus') {
+    appendHistory(raw, formatSusArtHtml(), '', activePrompt, true);
+    return;
+  }
 
   if (lower === 'help') {
     appendHistory(raw, getHelpText(), '', activePrompt);
@@ -472,7 +491,11 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           // Explicit deadline set
           const iso = explicit.deadlineDate.toISOString();
           const result = await dbAddTask(username, password, explicit.cleanedText, iso);
-          appendHistory(displayCmd, result.success ? `Task added: "${explicit.cleanedText}" [Deadline: ${explicit.formatted}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+          let msg = result.success ? `Task added: "${escapeHtml(explicit.cleanedText)}" [Deadline: ${escapeHtml(explicit.formatted)}]` : escapeHtml(result.message);
+          if (result.success && isPastDeadline(explicit.deadlineDate)) {
+            msg = `${formatSusArtHtml()}\n${msg}`;
+          }
+          appendHistory(displayCmd, msg, result.success ? 'success' : 'error', activePrompt, true);
           return;
         }
 
@@ -541,7 +564,11 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
         }
 
         const result = await dbUpdateDeadline(username, password, taskNum, parsedDate.toISOString());
-        appendHistory(displayCmd, result.success ? `${result.message} [Deadline: ${formatDateNice(parsedDate)}]` : result.message, result.success ? 'success' : 'error', activePrompt);
+        let msg = result.success ? `${escapeHtml(result.message)} [Deadline: ${escapeHtml(formatDateNice(parsedDate))}]` : escapeHtml(result.message);
+        if (result.success && isPastDeadline(parsedDate)) {
+          msg = `${formatSusArtHtml()}\n${msg}`;
+        }
+        appendHistory(displayCmd, msg, result.success ? 'success' : 'error', activePrompt, true);
         break;
       }
 

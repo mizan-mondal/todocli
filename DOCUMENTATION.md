@@ -922,6 +922,17 @@ The Java backend contains a comprehensive JUnit 5 integration test suite in [`Co
 | `testListAndLsGiveSameResult()` | Specifically asserts that `list` and `ls` return identical success flags, text outputs, and task payloads across both empty and populated states. |
 | `testPriorityCommand()` | Tests priority repositioning (e.g. `3 to 1`, `1 to 3`, `2 to 1`), stack shifting verification, boundary checks, and syntax validation. |
 | `testDeadlineFeature()` | Validates explicit `--by <DDMMYY>` flag parsing, `--by n` opt-out, `deadline <task_number> <date>` updates, deadline removal (`none`), and `list`/`ls` output formatting with `[Due: ...]` tags. |
+| `testSusArtOnPastDeadline()` | Validates rendering of the "sus" ASCII art whenever a task is created with a deadline in the past or when `sus` is executed directly. |
+
+---
+
+## 13. "sus" Easter Egg & Past-Deadline Guard
+
+The application includes a special visual guard named **"sus"** based on the Dwayne "The Rock" Johnson suspect eyebrow raise ASCII art:
+- **Trigger Condition**: When any task is added or updated with a deadline timestamp earlier than the current time (`date < now`), the system displays the "sus" ASCII art in the terminal before adding the task.
+- **Direct Command**: Users can also type `sus` directly in the terminal interface to view the ASCII art anytime.
+- **Component File**: Saved as [`src/sus.js`](file:///c:/Users/Mizan/Documents/projects/todocli/src/sus.js) exporting `sus`, `isPastDeadline()`, and `formatSusArtHtml()`.
+- **Styling**: Styled in `.sus-art` with monospace sizing (`clamp(5.5px, 0.95vw, 10.5px)`), amber glow (`#fbbf24`), and horizontal scroll preservation to ensure crisp display across all viewport sizes.
 
 ---
 
@@ -932,6 +943,7 @@ The Java backend contains a comprehensive JUnit 5 integration test suite in [`Co
 - [x] **Interactive Confirmation**: Safeguard prompt `(y/n)` ensures user control before finalizing deadlines.
 - [x] **Color-Coded Urgency**: Red (overdue), Yellow (due soon), Green (upcoming), Gray (no deadline) applied directly to task text.
 - [x] **Power-User Flags**: `--by <DDMMYY>` and `--by n` for instantaneous single-line task entry.
+- [x] **"sus" Past-Deadline Guard**: Renders Dwayne "The Rock" Johnson ASCII art when setting a past deadline or typing `sus`.
 - [x] **Unified Aliasing**: `list` and `ls` are interchangeable across all components.
 - [x] **Zero Local Storage Hoarding**: Tasks and users live in Supabase PostgreSQL / H2.
 - [x] **Salted Cryptography**: SHA-256 via Web Crypto API (frontend) & PBKDF2-HMAC-SHA256 (backend).
