@@ -203,7 +203,9 @@ function parseNaturalDeadline(taskText) {
   const now = new Date();
   const currentDay = now.getDay();
 
-  const triggerRegex = /(?:^|\s)(?:by|before|on|due\s+on|due|until)\s+(.+)$/i;
+  // 1. Check with trigger preposition: by, before, on, due, until
+  // e.g. "by friday", "on this saturday", "by next wednesday", "by 29 oct", "due tomorrow"
+  const triggerRegex = /(?:^|\s+)(?:by|before|on|due\s+on|due|until)\s+(.+)$/i;
   const triggerMatch = text.match(triggerRegex);
 
   let candidatePhrase = '';
@@ -213,10 +215,24 @@ function parseNaturalDeadline(taskText) {
     candidatePhrase = triggerMatch[1].trim().toLowerCase();
     matchIndex = triggerMatch.index;
   } else {
-    const endSimple = text.match(/(?:^|\s)(tomorrow|today|tonight)$/i);
-    if (endSimple) {
-      candidatePhrase = endSimple[1].trim().toLowerCase();
-      matchIndex = endSimple.index;
+    // 2. Check without preposition if ending with known date expressions:
+    // e.g. "next wednesday", "this saturday", "tomorrow", "today", "29 oct", "in 3 days"
+    const directPatterns = [
+      /(?:^|\s+)((?:this|next)\s+[a-z]+)$/i,
+      /(?:^|\s+)(tomorrow|today|tonight)$/i,
+      /(?:^|\s+)(in\s+\d+\s+(?:day|days|week|weeks))$/i,
+      /(?:^|\s+)(\d{1,2}(?:st|nd|rd|th)?\s+[a-z]+)$/i,
+      /(?:^|\s+)([a-z]+\s+\d{1,2}(?:st|nd|rd|th)?)$/i,
+      /(?:^|\s+)(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|tues|thur|thurs)$/i
+    ];
+
+    for (const pattern of directPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        candidatePhrase = match[1].trim().toLowerCase();
+        matchIndex = match.index;
+        break;
+      }
     }
   }
 
