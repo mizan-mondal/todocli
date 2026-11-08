@@ -16,7 +16,8 @@ import {
   dbAddTask,
   dbDeleteTask,
   dbPriorityTask,
-  dbUpdateDeadline
+  dbUpdateDeadline,
+  sortTasksBySeverity
 } from './supabase.js';
 
 import {
@@ -440,7 +441,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           break;
         }
 
-        const tasks = result.tasks || [];
+        const tasks = sortTasksBySeverity(result.tasks || []);
         if (tasks.length === 0) {
           appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
           break;

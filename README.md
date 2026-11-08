@@ -19,7 +19,7 @@ A web-based command-line interface (CLI) for a to-do list application powered by
 - **Logout**:
   - Typing `<username> <password> logout` or `logout` clears the session from browser storage and restores the prompt to `todocli:~$`.
 - **Security & Salted Password Hashing**: Plaintext passwords are never stored. The Supabase `users` table stores salted SHA-256 password hashes generated with cryptographically secure 16-byte random salts.
-- **Display Numbers vs. Database IDs**: Tasks are ordered deterministically and assigned 1-based serial numbers (`1., 2., 3. ...`). Deleting a task uses this serial number, which safely maps to internal database IDs.
+- **Automatic Severity Sorting & Display Numbers**: Tasks automatically get sorted by severity. Number 1 is assigned to the task with the nearest deadline (and overdue tasks), followed by subsequent deadlines in chronological order, with tasks without deadlines placed at the end. Deleting or updating a task safely uses this 1-based display number, which maps deterministically to internal database IDs.
 
 ---
 
@@ -132,6 +132,13 @@ Instead of leading bullet dots, the task text itself is dynamically colored base
 - 🟡 **Yellow (`#fbbf24`)**: Due today or within 48 hours.
 - 🟢 **Green (`#34d399`)**: Upcoming tasks (> 48 hours away).
 - ⚪ **Gray (`#e5e7eb`)**: Tasks without a deadline.
+
+### 5. Automatic Severity Sorting
+Tasks automatically get sorted by their severity across all operations:
+- **1 goes to the task with the nearest deadline** (overdue and nearest upcoming deadlines).
+- Tasks with later deadlines follow in ascending order (`2`, `3`, ...).
+- Tasks without a deadline are placed at the bottom.
+- Whenever tasks are added, deadlines are updated or cleared, or tasks are deleted, the entire task stack dynamically re-sorts and re-indexes so that the most urgent task is always #1.
 
 ---
 

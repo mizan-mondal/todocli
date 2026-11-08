@@ -1051,6 +1051,36 @@ async function dbAuthenticateUser(username, password) {
   }
 }
 
+/**
+ * Automatically sorts tasks by their severity:
+ * 1. Tasks with deadlines ordered ascending (nearest deadline first)
+ * 2. Tasks without deadlines placed at the end (nulls last)
+ * 3. Ties broken by position ASC, then id ASC
+ */
+function sortTasksBySeverity(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  return [...tasks].sort((a, b) => {
+    const deadA = a.deadline ? new Date(a.deadline).getTime() : null;
+    const deadB = b.deadline ? new Date(b.deadline).getTime() : null;
+
+    if (deadA !== null && deadB !== null) {
+      if (deadA !== deadB) return deadA - deadB;
+    } else if (deadA !== null) {
+      return -1;
+    } else if (deadB !== null) {
+      return 1;
+    }
+
+    const posA = a.position != null ? a.position : 0;
+    const posB = b.position != null ? b.position : 0;
+    if (posA !== posB) return posA - posB;
+
+    const idA = a.id != null ? a.id : 0;
+    const idB = b.id != null ? b.id : 0;
+    return idA - idB;
+  });
+}
+
 async function dbListTasks(username, password) {
   const auth = await dbAuthenticateUser(username, password);
   if (!auth.success) return { success: false, message: auth.message };
@@ -1074,7 +1104,8 @@ async function dbListTasks(username, password) {
   }
 
   if (data && data.success) {
-    const tasks = data.tasks || [];
+    const rawTasks = data.tasks || [];
+    const tasks = sortTasksBySeverity(rawTasks);
     if (tasks.length === 0) return { success: true, message: `No tasks found for user '${cleanUser}'.`, tasks: [] };
     const formatted = tasks.map((t, idx) => `${idx + 1}. ${t.task_name}`).join('\n');
     return { success: true, message: formatted, tasks };
@@ -1267,7 +1298,7 @@ async function executeDatabaseCommand(commandToRun, displayCmd, activePrompt) {
           break;
         }
 
-        const tasks = result.tasks || [];
+        const tasks = sortTasksBySeverity(result.tasks || []);
         if (tasks.length === 0) {
           appendHistory(displayCmd, `No tasks found for user '${username}'.`, '', activePrompt);
           break;

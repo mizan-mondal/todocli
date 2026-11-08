@@ -132,6 +132,17 @@ public class CommandController {
         activeLoggedInUsers.clear();
     }
 
+    public static final Comparator<Task> TASK_SEVERITY_COMPARATOR = Comparator
+            .comparing(Task::getDeadline, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Task::getPosition, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Task::getId, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    public List<Task> getTasksSortedBySeverity(String username) {
+        List<Task> tasks = new ArrayList<>(taskRepository.findByUsername(username));
+        tasks.sort(TASK_SEVERITY_COMPARATOR);
+        return tasks;
+    }
+
     public CommandController(TaskRepository taskRepository, UserRepository userRepository) {
         this.taskRepository = taskRepository;
         this.userRepository = userRepository;
@@ -369,7 +380,7 @@ public class CommandController {
 
             case "list":
             case "ls":
-                List<Task> tasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> tasks = getTasksSortedBySeverity(username);
                 if (tasks.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(true,
                             "No tasks found for user '" + username + "'.", tasks));
@@ -429,11 +440,17 @@ public class CommandController {
                     }
                 }
 
-                List<Task> currentTasksBeforeAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
-                int nextPos = currentTasksBeforeAdd.size() + 1;
-                Task newTask = new Task(username, taskName, nextPos, parsedDeadline);
+                Task newTask = new Task(username, taskName, 0, parsedDeadline);
                 taskRepository.save(newTask);
-                List<Task> currentTasksAfterAdd = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+
+                List<Task> allUserTasks = new ArrayList<>(taskRepository.findByUsername(username));
+                allUserTasks.sort(TASK_SEVERITY_COMPARATOR);
+                for (int i = 0; i < allUserTasks.size(); i++) {
+                    allUserTasks.get(i).setPosition(i + 1);
+                }
+                taskRepository.saveAll(allUserTasks);
+
+                List<Task> currentTasksAfterAdd = getTasksSortedBySeverity(username);
                 String deadlineSuffix = (parsedDeadline != null) ? String.format(" [Deadline: %s]", parsedDeadline.format(DateTimeFormatter.ofPattern("d MMM yyyy"))) : "";
                 String addOutput = String.format("Task added: \"%s\"%s", taskName, deadlineSuffix);
                 if (parsedDeadline != null && parsedDeadline.isBefore(LocalDateTime.now())) {
@@ -486,7 +503,7 @@ public class CommandController {
                             "Error: Missing task number. Usage: <username> <password> delete task <task_number>", null));
                 }
 
-                List<Task> userTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> userTasks = getTasksSortedBySeverity(username);
                 for (int num : taskNumbers) {
                     if (num < 1 || num > userTasks.size()) {
                         return ResponseEntity.ok(new CommandResponse(false,
@@ -512,12 +529,13 @@ public class CommandController {
                         .filter(t -> !deletedIds.contains(t.getId()))
                         .collect(Collectors.toList());
 
+                remainingTasks.sort(TASK_SEVERITY_COMPARATOR);
                 for (int i = 0; i < remainingTasks.size(); i++) {
                     remainingTasks.get(i).setPosition(i + 1);
                 }
                 taskRepository.saveAll(remainingTasks);
 
-                List<Task> finalRemainingTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> finalRemainingTasks = getTasksSortedBySeverity(username);
                 return ResponseEntity.ok(new CommandResponse(true,
                         String.join("\n", deletedMessages),
                         finalRemainingTasks));
@@ -551,7 +569,7 @@ public class CommandController {
                             "Error: Task numbers must be positive integers.", null));
                 }
 
-                List<Task> currentTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> currentTasks = getTasksSortedBySeverity(username);
                 if (currentTasks.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             "No tasks found for user '" + username + "'.", null));
@@ -579,7 +597,7 @@ public class CommandController {
                 }
                 taskRepository.saveAll(currentTasks);
 
-                List<Task> updatedTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> updatedTasks = getTasksSortedBySeverity(username);
                 return ResponseEntity.ok(new CommandResponse(true,
                         String.format("Task #%d moved to position #%d: \"%s\"", fromIndex, toIndex, moved.getTaskName()),
                         updatedTasks));
@@ -605,7 +623,7 @@ public class CommandController {
                             "Error: Task number must be a valid integer.", null));
                 }
 
-                List<Task> dlTasks = taskRepository.findByUsernameOrderByPositionAscIdAsc(username);
+                List<Task> dlTasks = getTasksSortedBySeverity(username);
                 if (dlTasks.isEmpty()) {
                     return ResponseEntity.ok(new CommandResponse(false,
                             "No tasks found for user '" + username + "'.", null));
@@ -621,9 +639,17 @@ public class CommandController {
                 if (dlDateStr.equalsIgnoreCase("none") || dlDateStr.equalsIgnoreCase("clear") || dlDateStr.equalsIgnoreCase("remove") || dlDateStr.equalsIgnoreCase("n")) {
                     targetDlTask.setDeadline(null);
                     taskRepository.save(targetDlTask);
+
+                    List<Task> reordered = new ArrayList<>(taskRepository.findByUsername(username));
+                    reordered.sort(TASK_SEVERITY_COMPARATOR);
+                    for (int i = 0; i < reordered.size(); i++) {
+                        reordered.get(i).setPosition(i + 1);
+                    }
+                    taskRepository.saveAll(reordered);
+
                     return ResponseEntity.ok(new CommandResponse(true,
                             String.format("Deadline removed for task #%d (\"%s\").", dlTaskNum, targetDlTask.getTaskName()),
-                            taskRepository.findByUsernameOrderByPositionAscIdAsc(username)));
+                            getTasksSortedBySeverity(username)));
                 } else {
                     LocalDateTime newDl = parseDeadlineString(dlDateStr);
                     if (newDl == null) {
@@ -632,13 +658,21 @@ public class CommandController {
                     }
                     targetDlTask.setDeadline(newDl);
                     taskRepository.save(targetDlTask);
+
+                    List<Task> reordered = new ArrayList<>(taskRepository.findByUsername(username));
+                    reordered.sort(TASK_SEVERITY_COMPARATOR);
+                    for (int i = 0; i < reordered.size(); i++) {
+                        reordered.get(i).setPosition(i + 1);
+                    }
+                    taskRepository.saveAll(reordered);
+
                     String dlMsg = String.format("Deadline updated for task #%d (\"%s\") [Deadline: %s].", dlTaskNum, targetDlTask.getTaskName(), newDl.format(DateTimeFormatter.ofPattern("d MMM yyyy")));
                     if (newDl.isBefore(LocalDateTime.now())) {
                         dlMsg = SUS_ASCII + "\nyou got a time machine ?\n" + dlMsg;
                     }
                     return ResponseEntity.ok(new CommandResponse(true,
                             dlMsg,
-                            taskRepository.findByUsernameOrderByPositionAscIdAsc(username)));
+                            getTasksSortedBySeverity(username)));
                 }
 
             case "sus":

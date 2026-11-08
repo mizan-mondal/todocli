@@ -11,6 +11,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     List<Task> findByUsername(String username);
     List<Task> findByUsernameOrderByIdAsc(String username);
     List<Task> findByUsernameOrderByPositionAscIdAsc(String username);
+    List<Task> findByUsernameOrderByDeadlineAscPositionAscIdAsc(String username);
     List<Task> findByUsernameOrderByCreatedAtDesc(String username);
     List<Task> findByUsernameAndCompleted(String username, boolean completed);
 }

@@ -30,6 +30,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_tasks_username_position ON tasks(username, position ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_tasks_username_id ON tasks(username, id ASC);
 CREATE INDEX IF NOT EXISTS idx_tasks_username_deadline ON tasks(username, deadline ASC);
+CREATE INDEX IF NOT EXISTS idx_tasks_username_severity ON tasks(username, deadline ASC NULLS LAST, position ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 -- =============================================================================
@@ -198,7 +199,7 @@ BEGIN
 END;
 $$;
 
--- 5.4 List Tasks (Requires valid credentials; returns ONLY tasks belonging to user)
+-- 5.4 List Tasks (Requires valid credentials; returns tasks automatically sorted by severity: nearest deadline first)
 CREATE OR REPLACE FUNCTION todocli_list_tasks(
     p_username TEXT,
     p_password_hash TEXT
@@ -228,7 +229,7 @@ BEGIN
             'position', t.position,
             'deadline', t.deadline,
             'created_at', t.created_at
-        ) ORDER BY t.position ASC, t.id ASC
+        ) ORDER BY t.deadline ASC NULLS LAST, t.position ASC, t.id ASC
     ), '[]'::jsonb)
     INTO v_tasks
     FROM tasks t
@@ -241,7 +242,7 @@ BEGIN
 END;
 $$;
 
--- 5.5 Add Task (Requires valid credentials; adds task with optional deadline)
+-- 5.5 Add Task (Requires valid credentials; adds task and maintains automatic severity sorting)
 CREATE OR REPLACE FUNCTION todocli_add_task(
     p_username TEXT,
     p_password_hash TEXT,
@@ -257,6 +258,8 @@ DECLARE
     v_auth BOOLEAN;
     v_next_pos INT;
     v_clean_task TEXT;
+    v_task RECORD;
+    v_idx INT;
 BEGIN
     v_clean_task := trim(p_task_name);
     IF v_clean_task IS NULL OR v_clean_task = '' THEN
@@ -279,6 +282,17 @@ BEGIN
     INSERT INTO tasks (username, task_name, position, deadline)
     VALUES (trim(p_username), v_clean_task, v_next_pos, p_deadline);
 
+    -- Automatically re-sequence position column by severity (nearest deadline first)
+    v_idx := 1;
+    FOR v_task IN (
+        SELECT id FROM tasks 
+        WHERE username = trim(p_username) 
+        ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
+    ) LOOP
+        UPDATE tasks SET position = v_idx WHERE id = v_task.id;
+        v_idx := v_idx + 1;
+    END LOOP;
+
     RETURN jsonb_build_object(
         'success', true,
         'message', 'Task added: "' || v_clean_task || '"'
@@ -286,7 +300,7 @@ BEGIN
 END;
 $$;
 
--- 5.5.1 Update Task Deadline (Set or clear deadline using 1-based display serial number)
+-- 5.5.1 Update Task Deadline (Set or clear deadline using 1-based display serial number in severity order)
 CREATE OR REPLACE FUNCTION todocli_update_deadline(
     p_username TEXT,
     p_password_hash TEXT,
@@ -303,6 +317,8 @@ DECLARE
     v_total INT;
     v_task_id BIGINT;
     v_task_name TEXT;
+    v_task RECORD;
+    v_idx INT;
 BEGIN
     SELECT EXISTS (
         SELECT 1 FROM users 
@@ -322,9 +338,9 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Error: Task number ' || p_task_number || ' is out of bounds (1-' || v_total || ').');
     END IF;
 
-    -- Map serial number to id
+    -- Map serial number to id using severity order (nearest deadline first)
     WITH ordered AS (
-        SELECT id, task_name, ROW_NUMBER() OVER (ORDER BY position ASC, id ASC) as rn
+        SELECT id, task_name, ROW_NUMBER() OVER (ORDER BY deadline ASC NULLS LAST, position ASC, id ASC) as rn
         FROM tasks
         WHERE username = trim(p_username)
     )
@@ -336,6 +352,17 @@ BEGIN
     SET deadline = p_deadline
     WHERE id = v_task_id;
 
+    -- Automatically re-sequence position column for all tasks in severity order (nearest deadline first)
+    v_idx := 1;
+    FOR v_task IN (
+        SELECT id FROM tasks 
+        WHERE username = trim(p_username) 
+        ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
+    ) LOOP
+        UPDATE tasks SET position = v_idx WHERE id = v_task.id;
+        v_idx := v_idx + 1;
+    END LOOP;
+
     IF p_deadline IS NULL THEN
         RETURN jsonb_build_object('success', true, 'message', 'Deadline removed for task #' || p_task_number || ' ("' || v_task_name || '").');
     ELSE
@@ -344,7 +371,7 @@ BEGIN
 END;
 $$;
 
--- 5.6 Delete Tasks (Requires valid credentials; deletes only tasks of authenticated user)
+-- 5.6 Delete Tasks (Requires valid credentials; deletes only tasks of authenticated user using severity order)
 CREATE OR REPLACE FUNCTION todocli_delete_tasks(
     p_username TEXT,
     p_password_hash TEXT,
@@ -389,7 +416,7 @@ BEGIN
     FOR v_task IN (
         SELECT id, task_name FROM tasks 
         WHERE username = trim(p_username) 
-        ORDER BY position ASC, id ASC
+        ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
     ) LOOP
         IF v_idx = ANY(p_task_numbers) THEN
             v_target_ids := array_append(v_target_ids, v_task.id);
@@ -400,12 +427,12 @@ BEGIN
 
     DELETE FROM tasks WHERE id = ANY(v_target_ids) AND username = trim(p_username);
 
-    -- Re-sequence position column for remaining tasks
+    -- Automatically re-sequence position column for remaining tasks in severity order
     v_idx := 1;
     FOR v_task IN (
         SELECT id FROM tasks 
         WHERE username = trim(p_username) 
-        ORDER BY position ASC, id ASC
+        ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
     ) LOOP
         UPDATE tasks SET position = v_idx WHERE id = v_task.id;
         v_idx := v_idx + 1;
@@ -465,7 +492,7 @@ BEGIN
     FOR v_task IN (
         SELECT id, task_name FROM tasks 
         WHERE username = trim(p_username) 
-        ORDER BY position ASC, id ASC
+        ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
     ) LOOP
         v_task_ids := array_append(v_task_ids, v_task.id);
     END LOOP;

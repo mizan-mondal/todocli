@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_username_position ON tasks(username, position ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_tasks_username_id ON tasks(username, id ASC);
 CREATE INDEX IF NOT EXISTS idx_tasks_username_deadline ON tasks(username, deadline ASC);
+CREATE INDEX IF NOT EXISTS idx_tasks_username_severity ON tasks(username, deadline ASC NULLS LAST, position ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 -- 4. Server-Side Rate Limiting Table
@@ -768,15 +769,19 @@ switch (operation) {
 
 ---
 
-## 9. Task Serial Number Mapping & Deletion Algorithm
+## 9. Task Serial Number Mapping & Automatic Severity Sorting
 
-A critical architectural feature of `todocli` is the distinction between **Internal Database Primary Keys** (`id: BIGINT`) and **Human-Facing Display Serial Numbers** (`1, 2, 3...`).
+A critical architectural feature of `todocli` is the distinction between **Internal Database Primary Keys** (`id: BIGINT`) and **Human-Facing Display Serial Numbers** (`1, 2, 3...`), combined with **Automatic Severity Sorting**:
 
 Users never see or type internal database IDs. Instead:
-1. When tasks are retrieved via `list` or `ls`, they are deterministically ordered by `id ASC`.
+1. When tasks are retrieved via `list` or `ls`, they are automatically sorted by **severity**:
+   - The task with the **nearest deadline** (and overdue tasks) is assigned **#1**.
+   - Subsequent tasks with deadlines follow in chronological order (`2`, `3`, ...).
+   - Tasks without deadlines are placed at the bottom (nulls last).
+   - Equal deadlines are broken deterministically by `position ASC, id ASC`.
 2. The UI outputs each item with a 1-based index $i \in [1, N]$.
-3. When the user executes `delete task 2`, the engine maps $2$ to index $2 - 1 = 1$ in the sorted array, locates the specific entity's primary key (`targetTask.id`), and executes deletion.
-4. Subsequent calls to `list` or `ls` automatically recalculate 1-based serials for remaining tasks.
+3. When the user executes `delete task 2` or `deadline 2 ...`, the engine maps $2$ to index $2 - 1 = 1$ in the severity-sorted array, locates the specific entity's primary key (`targetTask.id`), and executes the operation.
+4. Subsequent mutations dynamically re-sort and re-sequence 1-based display numbers across the entire stack.
 
 ```mermaid
 sequenceDiagram
@@ -785,24 +790,24 @@ sequenceDiagram
     participant CLI as todocli Engine
     participant DB as Database (Supabase / H2)
 
-    Note over DB: Table contains: ID=101 ("Task A"), ID=105 ("Task B"), ID=112 ("Task C")
+    Note over DB: Table contains: ID=101 ("Task A", due 20 Nov), ID=105 ("Task B", due 10 Nov), ID=112 ("Task C", no deadline)
     User->>CLI: "list" (or "ls")
-    CLI->>DB: Query tasks WHERE username = 'mizan' ORDER BY id ASC
-    DB-->>CLI: Return [Task(101), Task(105), Task(112)]
-    CLI->>User: Display:\n1. Task A\n2. Task B\n3. Task C
+    CLI->>DB: Query tasks ORDER BY deadline ASC NULLS LAST, position ASC, id ASC
+    DB-->>CLI: Return [Task(105, 10 Nov), Task(101, 20 Nov), Task(112, no deadline)]
+    CLI->>User: Display:\n1. Task B (due 10 Nov - nearest)\n2. Task A (due 20 Nov)\n3. Task C (no deadline)
 
-    User->>CLI: "delete task 2"
-    CLI->>DB: Query active tasks ORDER BY id ASC
-    DB-->>CLI: Return [Task(101), Task(105), Task(112)]
-    CLI->>CLI: Array lookup at index (2 - 1 = 1) -> Task(105)
+    User->>CLI: "delete task 1"
+    CLI->>DB: Query active tasks by severity
+    DB-->>CLI: Return [Task(105), Task(101), Task(112)]
+    CLI->>CLI: Array lookup at index (1 - 1 = 0) -> Task(105)
     CLI->>DB: DELETE FROM tasks WHERE id = 105
     DB-->>CLI: Success
-    CLI->>User: "Task #2 deleted: \"Task B\""
+    CLI->>User: "Task #1 deleted: \"Task B\""
 
     User->>CLI: "list" (or "ls")
-    CLI->>DB: Query active tasks ORDER BY id ASC
+    CLI->>DB: Query active tasks by severity
     DB-->>CLI: Return [Task(101), Task(112)]
-    CLI->>User: Display:\n1. Task A\n2. Task C (automatically re-indexed)
+    CLI->>User: Display:\n1. Task A (due 20 Nov)\n2. Task C (automatically re-indexed)
 ```
 
 ---
@@ -857,6 +862,19 @@ Instead of bullet dots at the start of tasks, `todocli` renders the **task title
 - 🟡 **Due Soon (`.task-due-soon`, `#fbbf24`)**: The deadline is today or within 48 hours.
 - 🟢 **Upcoming (`.task-upcoming`, `#34d399`)**: The deadline is safe and more than 48 hours in the future.
 - ⚪ **No Deadline (`.task-no-deadline`, `#e5e7eb`)**: Neutral monospace terminal text for tasks without time constraints.
+
+### 10.4 Automatic Severity Sorting Algorithm
+
+Tasks are automatically ranked and indexed by severity across both frontend and backend engines:
+
+1. **Urgency Rank Determination**:
+   - The task with the **nearest deadline** (and overdue tasks) is assigned **#1**.
+   - Subsequent tasks with deadlines follow in ascending chronological order (`#2`, `#3`, ...).
+   - Tasks with no deadline are placed at the bottom (`nulls last`).
+2. **Determinism Guarantee**:
+   Ties between tasks having the exact same deadline or tasks without a deadline are resolved deterministically using `position ASC, id ASC`.
+3. **Dynamic Re-Indexing**:
+   Any mutation (adding a task, deleting a task, updating or clearing a deadline) triggers automatic re-sorting and re-sequencing so display numbers $1 \ldots N$ always reflect immediate urgency.
 
 ---
 
@@ -923,6 +941,7 @@ The Java backend contains a comprehensive JUnit 5 integration test suite in [`Co
 | `testPriorityCommand()` | Tests priority repositioning (e.g. `3 to 1`, `1 to 3`, `2 to 1`), stack shifting verification, boundary checks, and syntax validation. |
 | `testDeadlineFeature()` | Validates explicit `--by <DDMMYY>` flag parsing, `--by n` opt-out, `deadline <task_number> <date>` updates, deadline removal (`none`), and `list`/`ls` output formatting with `[Due: ...]` tags. |
 | `testSusArtOnPastDeadline()` | Validates rendering of the "sus" ASCII art whenever a task is created with a deadline in the past or when `sus` is executed directly. |
+| `testSeveritySorting()` | Validates automatic sorting by severity (nearest deadline assigned #1, subsequent deadlines in ascending order, tasks without deadlines at the bottom, dynamic reordering on deadline update, and deletion mapping). |
 
 ---
 

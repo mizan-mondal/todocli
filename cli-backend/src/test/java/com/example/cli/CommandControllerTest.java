@@ -420,4 +420,46 @@ class CommandControllerTest {
         assertTrue(susResp.isSuccess());
         assertTrue(susResp.getOutput().contains("@@@@@@@#*+****++=="));
     }
+
+    @Test
+    void testSeveritySorting() {
+        sendCommand("mizan pass123 create");
+
+        // Add tasks in non-sorted order of deadlines
+        sendCommand("mizan pass123 add task Task Far --by 251126");
+        sendCommand("mizan pass123 add task Task Near --by 101126");
+        sendCommand("mizan pass123 add task Task None --by n");
+        sendCommand("mizan pass123 add task Task Mid --by 151126");
+
+        // List tasks - should automatically be sorted by severity:
+        // 1. Task Near (10 Nov 2026 - nearest deadline)
+        // 2. Task Mid (15 Nov 2026)
+        // 3. Task Far (25 Nov 2026)
+        // 4. Task None (no deadline)
+        CommandResponse listResp = sendCommand("mizan pass123 list");
+        assertTrue(listResp.isSuccess());
+        String out = listResp.getOutput();
+        assertTrue(out.startsWith("1. Task Near [Due: 10 Nov 2026]\n2. Task Mid [Due: 15 Nov 2026]\n3. Task Far [Due: 25 Nov 2026]\n4. Task None"));
+
+        // Delete task 1 (the one with the nearest deadline: Task Near)
+        CommandResponse delResp = sendCommand("mizan pass123 delete task 1");
+        assertTrue(delResp.isSuccess());
+        assertTrue(delResp.getOutput().contains("Task #1 deleted: \"Task Near\""));
+
+        // Verify remaining tasks re-indexed 1..3 with Task Mid now as #1
+        CommandResponse listAfterDel = sendCommand("mizan pass123 list");
+        assertTrue(listAfterDel.isSuccess());
+        String outAfterDel = listAfterDel.getOutput();
+        assertTrue(outAfterDel.startsWith("1. Task Mid [Due: 15 Nov 2026]\n2. Task Far [Due: 25 Nov 2026]\n3. Task None"));
+
+        // Update deadline for task 3 (Task None) to a nearer date (05 Nov 2026)
+        CommandResponse dlUpdate = sendCommand("mizan pass123 deadline 3 051126");
+        assertTrue(dlUpdate.isSuccess());
+
+        // Verify that Task None automatically became #1 because it now has the nearest deadline!
+        CommandResponse listAfterUpdate = sendCommand("mizan pass123 list");
+        assertTrue(listAfterUpdate.isSuccess());
+        String outAfterUpdate = listAfterUpdate.getOutput();
+        assertTrue(outAfterUpdate.startsWith("1. Task None [Due: 5 Nov 2026]\n2. Task Mid [Due: 15 Nov 2026]\n3. Task Far [Due: 25 Nov 2026]"));
+    }
 }
